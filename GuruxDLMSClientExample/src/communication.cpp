@@ -864,6 +864,7 @@ int CGXCommunication::ReadDLMSPacket(CGXByteBuffer& data, CGXReplyData& reply)
 
         if (m_hComPort != INVALID_HANDLE_VALUE)
         {
+            unsigned short pos = bb.GetSize();
             if (Read(0x7E, bb) != 0)
             {
                 return DLMS_ERROR_CODE_SEND_FAILED;
@@ -877,7 +878,7 @@ int CGXCommunication::ReadDLMSPacket(CGXByteBuffer& data, CGXReplyData& reply)
             {
                 tmp += " ";
             }
-            tmp += bb.ToHexString();
+            tmp += bb.ToHexString(pos, bb.GetSize() - pos, true);
         }
         else
         {
@@ -1064,18 +1065,12 @@ int CGXCommunication::ReadList(
         {
             return ret;
         }
-        if (list.size() != 1 && reply.GetValue().vt == DLMS_DATA_TYPE_ARRAY)
+        if (reply.GetValue().vt == DLMS_DATA_TYPE_ARRAY)
         {
             values.insert(values.end(), reply.GetValue().Arr.begin(), reply.GetValue().Arr.end());
         }
-        else if (reply.GetValue().vt != DLMS_DATA_TYPE_NONE)
-        {
-            // Value is null if data is send multiple frames.
-            values.push_back(reply.GetValue());
-        }
         reply.Clear();
     }
-
     if (values.size() != list.size())
     {
         //Invalid reply. Read items count do not match.
@@ -1187,7 +1182,7 @@ int CGXCommunication::ReadRowsByEntry(
 
 int CGXCommunication::ReadScalerAndUnits()
 {
-    int ret;
+    int ret = 0;
     std::string str;
     std::string ln;
     std::vector<std::pair<CGXDLMSObject*, unsigned char> > list;

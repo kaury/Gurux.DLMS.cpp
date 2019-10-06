@@ -124,16 +124,22 @@ private:
         CGXReplyData& reply,
         int index);
 
-    static int HandledGloRequest(CGXDLMSSettings& settings,
+    static int HandleGloDedRequest(
+        CGXDLMSSettings& settings,
         CGXReplyData& data);
 
-    static int HandledGloResponse(
+    static int HandleGloDedResponse(
         CGXDLMSSettings& settings,
         CGXReplyData& data, int index);
 
     static int HandleGeneralCiphering(
         CGXDLMSSettings& settings,
         CGXReplyData& data);
+
+
+    static int HandleGetResponseWithList(
+        CGXDLMSSettings& settings,
+        CGXReplyData& reply);
 
 public:
 
@@ -212,7 +218,6 @@ public:
         CGXDLMSSNParameters& p,
         CGXByteBuffer& reply);
 
-
     /////////////////////////////////////////////////////////////////////////////
     // Generates an acknowledgment message, with which the server is informed to
     // send next packets.
@@ -223,6 +228,19 @@ public:
     static int ReceiverReady(
         CGXDLMSSettings& settings,
         DLMS_DATA_REQUEST_TYPES type,
+        CGXCipher* cipher,
+        CGXByteBuffer& reply);
+
+    /////////////////////////////////////////////////////////////////////////////
+    // Generates an acknowledgment message, with which the server is informed to
+    // send next packets.
+    /////////////////////////////////////////////////////////////////////////////
+    // type : Frame type
+    // Returns : Acknowledgment message as unsigned char array.
+    /////////////////////////////////////////////////////////////////////////////
+    static int ReceiverReady(
+        CGXDLMSSettings& settings,
+        CGXReplyData& data,
         CGXCipher* cipher,
         CGXByteBuffer& reply);
 
