@@ -52,7 +52,6 @@ CGXDLMSClient::CGXDLMSClient(bool UseLogicalNameReferencing,
     const char* password,
     DLMS_INTERFACE_TYPE intefaceType) : m_Settings(false)
 {
-    m_AutoIncreaseInvokeID = false;
     m_IsAuthenticationRequired = false;
     m_Settings.SetUseLogicalNameReferencing(UseLogicalNameReferencing);
     m_Settings.SetClientAddress(clientAddress);
@@ -85,6 +84,37 @@ CGXDLMSClient::~CGXDLMSClient()
 unsigned short CGXDLMSClient::GetMaxPduSize()
 {
     return m_Settings.GetMaxPduSize();
+}
+
+
+bool CGXDLMSClient::GetUseUtc2NormalTime()
+{
+    return m_Settings.GetUseUtc2NormalTime();
+}
+
+void CGXDLMSClient::SetUseUtc2NormalTime(bool value)
+{
+    m_Settings.SetUseUtc2NormalTime(value);
+}
+
+unsigned char CGXDLMSClient::GetUserID()
+{
+    return m_Settings.GetUserID();
+}
+
+void CGXDLMSClient::SetUserID(unsigned char value)
+{
+    m_Settings.SetUserID(value);
+}
+
+unsigned char CGXDLMSClient::GetQualityOfService()
+{
+    return m_Settings.GetQualityOfService();
+}
+
+void CGXDLMSClient::SetQualityOfService(unsigned char value)
+{
+    m_Settings.SetQualityOfService(value);
 }
 
 CGXByteBuffer& CGXDLMSClient::GetSourceSystemTitle()
@@ -147,6 +177,38 @@ DLMS_SERVICE_CLASS CGXDLMSClient::GetServiceClass()
     return m_Settings.GetServiceClass();
 }
 
+DLMS_AUTHENTICATION CGXDLMSClient::GetAuthentication()
+{
+    return m_Settings.GetAuthentication();
+}
+
+void CGXDLMSClient::SetAuthentication(DLMS_AUTHENTICATION value)
+{
+    m_Settings.SetAuthentication(value);
+}
+
+
+unsigned long CGXDLMSClient::GetClientAddress()
+{
+    return m_Settings.GetClientAddress();
+}
+
+void CGXDLMSClient::SetClientAddress(unsigned long value)
+{
+    m_Settings.SetClientAddress(value);
+}
+
+unsigned long CGXDLMSClient::GetServerAddress()
+{
+    return m_Settings.GetServerAddress();
+}
+
+// Server address.
+void CGXDLMSClient::SetServerAddress(unsigned long value)
+{
+    m_Settings.SetServerAddress(value);
+}
+
 void CGXDLMSClient::SetServiceClass(DLMS_SERVICE_CLASS value)
 {
     m_Settings.SetServiceClass(value);
@@ -172,7 +234,7 @@ void CGXDLMSClient::SetInvokeID(unsigned char value) {
  * @return Auto increase Invoke ID.
  */
 bool CGXDLMSClient::GetAutoIncreaseInvokeID() {
-    return m_AutoIncreaseInvokeID;
+    return m_Settings.GetAutoIncreaseInvokeID();
 }
 
 /**
@@ -180,7 +242,7 @@ bool CGXDLMSClient::GetAutoIncreaseInvokeID() {
  *            Auto increase Invoke ID.
  */
 void CGXDLMSClient::SetAutoIncreaseInvokeID(bool value) {
-    m_AutoIncreaseInvokeID = value;
+    m_Settings.SetAutoIncreaseInvokeID(value);
 }
 
 CGXDLMSLimits& CGXDLMSClient::GetLimits()
@@ -659,7 +721,7 @@ int CGXDLMSClient::AARQRequest(std::vector<CGXByteBuffer>& packets)
         return ret;
     }
     m_Settings.GetStoCChallenge().Clear();
-    if (m_AutoIncreaseInvokeID)
+    if (GetAutoIncreaseInvokeID())
     {
         m_Settings.SetInvokeID(0);
     }
@@ -711,6 +773,14 @@ int CGXDLMSClient::ParseAAREResponse(CGXByteBuffer& reply)
     {
         return ret;
     }
+    if (result != DLMS_ASSOCIATION_RESULT_ACCEPTED)
+    {
+        if (result == DLMS_ASSOCIATION_RESULT_TRANSIENT_REJECTED)
+        {
+            return DLMS_ERROR_CODE_REJECTED_TRANSIENT;
+        }
+        return DLMS_ERROR_CODE_REJECTED_PERMAMENT;
+    }
     m_IsAuthenticationRequired = (DLMS_SOURCE_DIAGNOSTIC_AUTHENTICATION_REQUIRED == sd);
     if (m_Settings.GetDLMSVersion() != 6)
     {
@@ -743,6 +813,14 @@ int CGXDLMSClient::GetApplicationAssociationRequest(
     if (m_Settings.GetAuthentication() == DLMS_AUTHENTICATION_HIGH_GMAC)
     {
         pw = m_Settings.GetCipher()->GetSystemTitle();
+    }
+    else if (m_Settings.GetAuthentication() == DLMS_AUTHENTICATION_HIGH_SHA256)
+    {
+        pw.Set(&m_Settings.GetPassword());
+        pw.Set(&m_Settings.GetCipher()->GetSystemTitle());
+        pw.Set(&m_Settings.GetSourceSystemTitle());
+        pw.Set(&m_Settings.GetStoCChallenge());
+        pw.Set(&m_Settings.GetCtoSChallenge());
     }
     else
     {
@@ -799,6 +877,14 @@ int CGXDLMSClient::ParseApplicationAssociationResponse(
             {
                 return ret;
             }
+        }
+        else if (m_Settings.GetAuthentication() == DLMS_AUTHENTICATION_HIGH_SHA256)
+        {
+            secret.Set(&m_Settings.GetPassword());
+            secret.Set(&m_Settings.GetSourceSystemTitle());
+            secret.Set(&m_Settings.GetCipher()->GetSystemTitle());
+            secret.Set(&m_Settings.GetCtoSChallenge());
+            secret.Set(&m_Settings.GetStoCChallenge());
         }
         else
         {
@@ -990,11 +1076,6 @@ int CGXDLMSClient::ReleaseRequest(std::vector<CGXByteBuffer>& packets)
     buff.SetUInt8(0x80);
     buff.SetUInt8(01);
     buff.SetUInt8(00);
-    //Increase IC.
-    if (m_Settings.GetCipher() != NULL && m_Settings.GetCipher()->IsCiphered())
-    {
-        m_Settings.GetCipher()->SetFrameCounter(m_Settings.GetCipher()->GetFrameCounter() + 1);
-    }
     CGXAPDU::GenerateUserInformation(m_Settings, m_Settings.GetCipher(), NULL, buff);
     buff.SetUInt8(0, (unsigned char)(buff.GetSize() - 1));
     if (GetUseLogicalNameReferencing())
@@ -1086,10 +1167,6 @@ int CGXDLMSClient::Read(CGXDLMSVariant& name, DLMS_OBJECT_TYPE objectType, int a
         return DLMS_ERROR_CODE_INVALID_PARAMETER;
     }
     m_Settings.ResetBlockIndex();
-    if (m_AutoIncreaseInvokeID)
-    {
-        m_Settings.SetInvokeID((unsigned char)((m_Settings.GetInvokeID() + 1) & 0xF));
-    }
     CGXByteBuffer attributeDescriptor;
     if (GetUseLogicalNameReferencing())
     {
@@ -1140,13 +1217,6 @@ int CGXDLMSClient::Read(CGXDLMSVariant& name, DLMS_OBJECT_TYPE objectType, int a
     return ret;
 }
 
-/**
-* Read list of COSEM objects.
-*
-* @param list
-*            DLMS objects to read.
-* @return Read request as byte array.
-*/
 int CGXDLMSClient::ReadList(
     std::vector<std::pair<CGXDLMSObject*, unsigned char> >& list,
     std::vector<CGXByteBuffer>& reply)
@@ -1156,6 +1226,11 @@ int CGXDLMSClient::ReadList(
         //Invalid parameter
         return DLMS_ERROR_CODE_INVALID_PARAMETER;
     }
+    if ((GetNegotiatedConformance() & DLMS_CONFORMANCE_MULTIPLE_REFERENCES) == 0) {
+        //Meter doesn't support multiple objects reading with one request.
+        return DLMS_ERROR_CODE_INVALID_PARAMETER;
+    }
+
     int ret;
     m_Settings.ResetBlockIndex();
     CGXByteBuffer bb;
@@ -1227,6 +1302,126 @@ int CGXDLMSClient::ReadList(
     return ret;
 }
 
+int CGXDLMSClient::WriteList(
+    std::vector<std::pair<CGXDLMSObject*, unsigned char> >& list,
+    std::vector<CGXByteBuffer>& reply)
+{
+    if ((GetNegotiatedConformance() & DLMS_CONFORMANCE_MULTIPLE_REFERENCES) == 0) {
+        //Meter doesn't support multiple objects reading with one request.
+        return DLMS_ERROR_CODE_INVALID_PARAMETER;
+    }
+
+    if (list.size() == 0)
+    {
+        //Invalid parameter
+        return DLMS_ERROR_CODE_INVALID_PARAMETER;
+    }
+
+    int ret = 0;
+    m_Settings.ResetBlockIndex();
+    CGXByteBuffer bb;
+    if (GetUseLogicalNameReferencing())
+    {
+        CGXDLMSLNParameters p(&m_Settings, 0,
+            DLMS_COMMAND_SET_REQUEST, DLMS_SET_COMMAND_TYPE_WITH_LIST,
+            &bb, NULL, 0xff, DLMS_COMMAND_NONE);
+        // Add length.
+        GXHelpers::SetObjectCount((unsigned long) list.size(), bb);
+        for (std::vector<std::pair<CGXDLMSObject*, unsigned char> >::iterator it = list.begin(); it != list.end(); ++it)
+        {
+            // CI.
+            bb.SetUInt16(it->first->GetObjectType());
+            bb.Set(it->first->m_LN, 6);
+            // Attribute ID.
+            bb.SetUInt8(it->second);
+            // Attribute selector is not used.
+            bb.SetUInt8(0);
+        }
+        // Add length.
+        GXHelpers::SetObjectCount((unsigned long)list.size(), bb);
+        for (std::vector<std::pair<CGXDLMSObject*, unsigned char> >::iterator it = list.begin(); it != list.end(); ++it)
+        {
+            CGXDLMSValueEventArg e(it->first, it->second);
+            int ret = it->first->GetValue(m_Settings, e);
+            if (ret != 0)
+            {
+                break;
+            }
+            CGXDLMSVariant value = e.GetValue();
+            if (e.IsByteArray())
+            {
+                bb.Set(value.byteArr, value.GetSize());
+            }
+            else
+            {
+                DLMS_DATA_TYPE type = DLMS_DATA_TYPE_NONE;
+                if ((ret = it->first->GetDataType(it->second, type)) != 0)
+                {
+                    break;
+                }
+                if ((ret = GXHelpers::SetData(bb, type, value)) != 0)
+                {
+                    break;
+                }
+            }
+        }
+        if (ret == 0)
+        {
+            if ((ret = CGXDLMS::GetLnMessages(p, reply)) != 0)
+            {
+                return ret;
+            }
+        }
+    }
+    else
+    {
+        int sn;
+        for (std::vector<std::pair<CGXDLMSObject*, unsigned char> >::iterator it = list.begin(); it != list.end(); ++it)
+        {
+            // Add variable type.
+            bb.SetUInt8(DLMS_VARIABLE_ACCESS_SPECIFICATION_VARIABLE_NAME);
+            sn = it->first->GetShortName();
+            sn += (it->second - 1) * 8;
+            bb.SetUInt16(sn);
+        }
+        // Add length.
+        GXHelpers::SetObjectCount((unsigned long)list.size(), bb);
+        for (std::vector<std::pair<CGXDLMSObject*, unsigned char> >::iterator it = list.begin(); it != list.end(); ++it)
+        {
+            CGXDLMSValueEventArg e(it->first, it->second);
+            int ret = it->first->GetValue(m_Settings, e);
+            if (ret != 0)
+            {
+                break;
+            }
+            CGXDLMSVariant value = e.GetValue();
+            if (e.IsByteArray())
+            {
+                bb.Set(value.byteArr, value.GetSize());
+            }
+            else
+            {
+                DLMS_DATA_TYPE type = DLMS_DATA_TYPE_NONE;
+                if ((ret = it->first->GetDataType(it->second, type)) != 0)
+                {
+                    break;
+                }
+                if ((ret = GXHelpers::SetData(bb, type, value)) != 0)
+                {
+                    break;
+                }
+            }
+        }
+        if (ret == 0)
+        {
+            CGXDLMSSNParameters p(&m_Settings, DLMS_COMMAND_WRITE_REQUEST,
+                (unsigned long)list.size(), 0xFF, &bb, NULL);
+            ret = CGXDLMS::GetSnMessages(p, reply);
+        }
+    }
+    return ret;
+}
+
 /**
      * Update list of values.
      *
@@ -1271,10 +1466,6 @@ int CGXDLMSClient::Write(
         CGXDLMSVariant value = e.GetValue();
         int ret;
         m_Settings.ResetBlockIndex();
-        if (m_AutoIncreaseInvokeID)
-        {
-            m_Settings.SetInvokeID((unsigned char)((m_Settings.GetInvokeID() + 1) & 0xF));
-        }
         CGXByteBuffer bb, data;
         if (e.IsByteArray())
         {
@@ -1404,27 +1595,47 @@ int CGXDLMSClient::Write(CGXDLMSVariant& name, DLMS_OBJECT_TYPE objectType,
 int CGXDLMSClient::Method(CGXDLMSObject* item, int index,
     CGXDLMSVariant& data, std::vector<CGXByteBuffer>& reply)
 {
-    CGXDLMSVariant name = item->GetName();
-    return Method(name, item->GetObjectType(), index, data, reply);
+    return Method(item, index, data, data.vt, reply);
 }
 
 /**
-    * Generate Method (Action) request..
+    * Generate Method (Action) request.
     *
-    * @param name
+    * @param item
     *            Method object short name or Logical Name.
-    * @param objectType
-    *            Object type.
     * @param index
     *            Method index.
-    * @param value
+    * @param data
     *            Method data.
-    * @param dataType
+    * @param type
     *            Data type.
     * @return DLMS action message.
     */
-int CGXDLMSClient::Method(CGXDLMSVariant name, DLMS_OBJECT_TYPE objectType,
-    int index, CGXDLMSVariant& value, std::vector<CGXByteBuffer>& reply)
+int CGXDLMSClient::Method(CGXDLMSObject* item, int index,
+    CGXDLMSVariant& data, DLMS_DATA_TYPE dataType, std::vector<CGXByteBuffer>& reply)
+{
+    CGXDLMSVariant name = item->GetName();
+    return Method(name, item->GetObjectType(), index, data, dataType, reply);
+}
+
+int CGXDLMSClient::Method(
+    CGXDLMSVariant name,
+    DLMS_OBJECT_TYPE objectType,
+    int index,
+    CGXDLMSVariant& value,
+    std::vector<CGXByteBuffer>& reply)
+{
+    return Method(name, objectType,
+        index, value, value.vt, reply);
+}
+
+int CGXDLMSClient::Method(
+    CGXDLMSVariant name,
+    DLMS_OBJECT_TYPE objectType,
+    int index,
+    CGXDLMSVariant& value,
+    DLMS_DATA_TYPE dataType,
+    std::vector<CGXByteBuffer>& reply)
 {
     int ret;
     if (index < 1)
@@ -1435,11 +1646,7 @@ int CGXDLMSClient::Method(CGXDLMSVariant name, DLMS_OBJECT_TYPE objectType,
 
     CGXByteBuffer bb, data;
     m_Settings.ResetBlockIndex();
-    if (m_AutoIncreaseInvokeID)
-    {
-        m_Settings.SetInvokeID((unsigned char)((m_Settings.GetInvokeID() + 1) & 0xF));
-    }
-    if ((ret = GXHelpers::SetData(data, value.vt, value)) != 0)
+    if ((ret = GXHelpers::SetData(data, dataType, value)) != 0)
     {
         return ret;
     }

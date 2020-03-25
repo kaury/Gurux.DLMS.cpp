@@ -159,7 +159,7 @@ int CGXDLMSImageTransfer::ImageTransferInitiate(CGXDLMSClient* client, unsigned 
         (ret = GXHelpers::SetData(data, DLMS_DATA_TYPE_UINT32, size)) == 0)
     {
         CGXDLMSVariant tmp = data;
-        ret = client->Method(this, 1, tmp, reply);
+        ret = client->Method(this, 1, tmp, DLMS_DATA_TYPE_ARRAY, reply);
     }
     return ret;
 }
@@ -217,12 +217,12 @@ int CGXDLMSImageTransfer::ImageBlockTransfer(CGXDLMSClient* client, CGXByteBuffe
     std::vector<CGXByteBuffer> blocks;
     if ((ret = GetImageBlocks(image, blocks)) == 0)
     {
-        imageBlockCount = blocks.size();
+        imageBlockCount = (unsigned long) blocks.size();
         CGXDLMSVariant tmp;
         for (std::vector<CGXByteBuffer>::iterator it = blocks.begin(); it != blocks.end(); ++it)
         {
             tmp = *it;
-            if ((ret = client->Method(this, 2, tmp, reply)) != 0)
+            if ((ret = client->Method(this, 2, tmp, DLMS_DATA_TYPE_ARRAY, reply)) != 0)
             {
                 break;
             }
@@ -284,40 +284,40 @@ void CGXDLMSImageTransfer::GetValues(std::vector<std::string>& values)
     values.push_back(sb.str());
 }
 
-void CGXDLMSImageTransfer::GetAttributeIndexToRead(std::vector<int>& attributes)
+void CGXDLMSImageTransfer::GetAttributeIndexToRead(bool all, std::vector<int>& attributes)
 {
     //LN is static and read only once.
-    if (CGXDLMSObject::IsLogicalNameEmpty(m_LN))
+    if (all || CGXDLMSObject::IsLogicalNameEmpty(m_LN))
     {
         attributes.push_back(1);
     }
     //ImageBlockSize
-    if (!IsRead(2))
+    if (all || !IsRead(2))
     {
         attributes.push_back(2);
     }
     //ImageTransferredBlocksStatus
-    if (!IsRead(3))
+    if (all || !IsRead(3))
     {
         attributes.push_back(3);
     }
     //ImageFirstNotTransferredBlockNumber
-    if (!IsRead(4))
+    if (all || !IsRead(4))
     {
         attributes.push_back(4);
     }
     //ImageTransferEnabled
-    if (!IsRead(5))
+    if (all || !IsRead(5))
     {
         attributes.push_back(5);
     }
     //ImageTransferStatus
-    if (!IsRead(6))
+    if (all || !IsRead(6))
     {
         attributes.push_back(6);
     }
     //ImageActivateInfo
-    if (!IsRead(7))
+    if (all || !IsRead(7))
     {
         attributes.push_back(7);
     }

@@ -32,48 +32,44 @@
 // Full text may be retrieved at http://www.gnu.org/licenses/gpl-2.0.txt
 //---------------------------------------------------------------------------
 
-#ifndef GXSECURE_H
-#define GXSECURE_H
+#ifndef GX_XMLWRITER_H
+#define GX_XMLWRITER_H
+#include <vector>
+#include <string>
 
-#include "../include/enums.h"
-#include "../include/GXBytebuffer.h"
-#include "../include/GXDLMSSettings.h"
-
-class CGXSecure
+class CGXXmlWriter
 {
+    FILE* m_f;
+    const char* NEW_LINE = "\n";
+    std::vector<std::string> m_Elements;
+
+    //
+    // Append spaces to the buffer.
+    // count: Amount of spaces.
+    int AppendSpaces();
+
+    int Write(const char* data);
 public:
-    /**
-    * Generates challenge.
-    *
-    * @param authentication
-    *            Used authentication.
-    * @return Generated challenge.
-    */
-    static int GenerateChallenge(
-        DLMS_AUTHENTICATION authentication,
-        CGXByteBuffer& challenge);
+    //Constructor.
+    CGXXmlWriter(FILE* f);
+    int WriteStartDocument();
 
-    /**
-    * Chipher text.
-    *
-    * @param auth
-    *            Authentication level.
-    * @param data
-    *            Text to chipher.
-    * @param secret
-    *            Secret.
-    * @return Chiphered text.
-    */
-    static int Secure(
-        CGXDLMSSettings& settings,
-        CGXCipher* cipher,
-        unsigned long ic,
-        CGXByteBuffer& data,
-        CGXByteBuffer& secret,
-        CGXByteBuffer& reply);
+    int WriteStartElement(const char* name);
 
-    static int EncryptAesKeyWrapping(CGXByteBuffer& data, CGXByteBuffer& kek, CGXByteBuffer& reply);
-    static int DecryptAesKeyWrapping(CGXByteBuffer& data, CGXByteBuffer& kek, CGXByteBuffer& reply);
+    int WriteElementString(const char* name, int value);
+
+    int WriteElementString(const char* name, const char* value);
+
+    int WriteElementString(const char* name, const std::string& value);
+
+    // Write End Element tag.
+    int WriteEndElement(bool addSpaces);
+
+   // Write End Element tag.
+    int WriteEndElement();
+
+    // Write End document tag.
+    int WriteEndDocument();
 };
 
-#endif //GXSECURE_H
+#endif //GX_XMLWRITER_H

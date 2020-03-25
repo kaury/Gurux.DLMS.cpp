@@ -123,8 +123,8 @@ static int GetArray(CGXByteBuffer& buff, CGXDataInfo& info, int index, CGXDLMSVa
     */
 int GetTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
 {
-    int ret;
-    unsigned char hour, minute, second, ms;
+    int ms, ret;
+    unsigned char hour, minute, second, ch;
     if (buff.GetSize() - buff.GetPosition() < 4)
     {
         // If there is not enough data available.
@@ -150,9 +150,17 @@ int GetTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     {
         return ret;
     }
-    if ((ret = buff.GetUInt8(&ms)) != 0)
+    if ((ret = buff.GetUInt8(&ch)) != 0)
     {
         return ret;
+    }
+    if (ch != 0xFF)
+    {
+        ms = 10 * ch;
+    }
+    else
+    {
+        ms = -1;
     }
     CGXTime dt(hour, minute, second, ms);
     value = dt;
@@ -199,10 +207,35 @@ int GetDate(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     {
         return ret;
     }
+    int extra = DATE_TIME_EXTRA_INFO_NONE;
+    if (month == 0xFE)
+    {
+        //Daylight savings begin.
+        month = 1;
+        extra |= DATE_TIME_EXTRA_INFO_DST_BEGIN;
+    }
+    else if (month == 0xFD)
+    {
+        // Daylight savings end.
+        month = 1;
+        extra |= DATE_TIME_EXTRA_INFO_DST_END;
+    }
     // Get day
     if ((ret = buff.GetUInt8(&day)) != 0)
     {
         return ret;
+    }
+    if (day == 0xFD)
+    {
+        // 2nd last day of month.
+        day = 1;
+        extra |= DATE_TIME_EXTRA_INFO_LAST_DAY2;
+    }
+    else if (day == 0xFE)
+    {
+        //Last day of month
+        day = 1;
+        extra |= DATE_TIME_EXTRA_INFO_LAST_DAY;
     }
     CGXDate dt(year, month, day);
     // Skip week day
@@ -234,6 +267,7 @@ int GetDate(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
 */
 int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
 {
+    DATETIME_SKIPS skip = DATETIME_SKIPS_NONE;
     struct tm tm = { 0 };
     unsigned short year;
     short deviation;
@@ -301,6 +335,7 @@ int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     }
     else
     {
+        skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_MS);
         ms = 0;
     }
     if ((ret = buff.GetInt16(&deviation)) != 0)
@@ -313,8 +348,12 @@ int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     }
     status = ch;
     CGXDateTime dt;
+    if (status == 0xFF)
+    {
+        status = 0;
+        skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_STATUS);
+    }
     dt.SetStatus((DLMS_CLOCK_STATUS)status);
-    DATETIME_SKIPS skip = DATETIME_SKIPS_NONE;
     if (year < 1 || year == 0xFFFF)
     {
         skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_YEAR);
@@ -329,9 +368,19 @@ int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
         tm.tm_wday = 0;
         skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_DAYOFWEEK);
     }
-    dt.SetDaylightSavingsBegin(tm.tm_mon == 0xFE);
-    dt.SetDaylightSavingsEnd(tm.tm_mon == 0xFD);
-    if (tm.tm_mon < 1 || tm.tm_mon > 12)
+    if (tm.tm_mon == 0xFE)
+    {
+        //Daylight savings begin.
+        tm.tm_mon = 0;
+        dt.SetExtra((DATE_TIME_EXTRA_INFO)(dt.GetExtra() | DATE_TIME_EXTRA_INFO_DST_BEGIN));
+    }
+    else if (tm.tm_mon == 0xFD)
+    {
+        // Daylight savings end.
+        tm.tm_mon = 0;
+        dt.SetExtra((DATE_TIME_EXTRA_INFO)(dt.GetExtra() | DATE_TIME_EXTRA_INFO_DST_END));
+    }
+    else if (tm.tm_mon < 1 || tm.tm_mon > 12)
     {
         skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_MONTH);
         tm.tm_mon = 0;
@@ -340,14 +389,22 @@ int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     {
         tm.tm_mon -= 1;
     }
-    if (tm.tm_mday == -1 || tm.tm_mday == 0 || tm.tm_mday > 31)
+    if (tm.tm_mday == 0xFD)
+    {
+        // 2nd last day of month.
+        tm.tm_mday = 1;
+        dt.SetExtra((DATE_TIME_EXTRA_INFO)(dt.GetExtra() | DATE_TIME_EXTRA_INFO_LAST_DAY2));
+    }
+    else if (tm.tm_mday == 0xFE)
+    {
+        //Last day of month
+        tm.tm_mday = 1;
+        dt.SetExtra((DATE_TIME_EXTRA_INFO)(dt.GetExtra() | DATE_TIME_EXTRA_INFO_LAST_DAY));
+    }
+    else if (tm.tm_mday < 1 || tm.tm_mday > 31)
     {
         skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_DAY);
         tm.tm_mday = 1;
-    }
-    else if (tm.tm_mday < 0)
-    {
-        tm.tm_mday = CGXDateTime::DaysInMonth(year, tm.tm_mon + 1) + tm.tm_mday + 3;
     }
     if (tm.tm_hour < 0 || tm.tm_hour > 24)
     {
@@ -367,7 +424,6 @@ int GetDateTime(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
     // If ms is Zero it's skipped.
     if (ms < 1 || ms > 1000)
     {
-        skip = (DATETIME_SKIPS)(skip | DATETIME_SKIPS_MS);
         ms = 0;
     }
     tm.tm_isdst = (status & DLMS_CLOCK_STATUS_DAYLIGHT_SAVE_ACTIVE) != 0;
@@ -671,7 +727,7 @@ int GetInt8(CGXByteBuffer& buff, CGXDataInfo& info, CGXDLMSVariant& value)
         info.SetComplete(false);
         return 0;
     }
-    if ((ret = buff.GetUInt8((unsigned char*)&val)) != 0)
+    if ((ret = buff.GetUInt8((unsigned char*)& val)) != 0)
     {
         return ret;
     }
@@ -922,7 +978,7 @@ int GetUtfString(CGXByteBuffer& buff, CGXDataInfo& info, bool knownType, CGXDLMS
 {
     int ret;
     unsigned long len = 0;
-    wchar_t *tmp;
+    wchar_t* tmp;
     if (knownType)
     {
         len = buff.GetSize();
@@ -1041,14 +1097,7 @@ int GetOctetString(CGXByteBuffer& buff, CGXDataInfo& info, bool knownType, CGXDL
                 }
                 if (isString)
                 {
-                    for (int pos = 0; pos != value.GetSize(); ++pos)
-                    {
-                        if (value.byteArr[pos] < 32 || value.byteArr[pos] > 126)
-                        {
-                            isString = false;
-                            break;
-                        }
-                    }
+                    isString = CGXByteBuffer::IsAsciiString(value.byteArr, value.GetSize());
                 }
                 if (isString)
                 {
@@ -1076,7 +1125,7 @@ int GetString(CGXByteBuffer& buff, CGXDataInfo& info, bool knownType, CGXDLMSVar
 {
     int ret;
     unsigned long len = 0;
-    char *tmp;
+    char* tmp;
     if (knownType)
     {
         len = buff.GetSize();
@@ -1097,6 +1146,10 @@ int GetString(CGXByteBuffer& buff, CGXDataInfo& info, bool knownType, CGXDLMSVar
     if (len > 0)
     {
         tmp = new char[len + 1];
+        if (tmp == NULL)
+        {
+            return DLMS_ERROR_CODE_OUTOFMEMORY;
+        }
         tmp[len] = '\0';
         if ((ret = buff.Get((unsigned char*)tmp, len)) != 0)
         {
@@ -1109,6 +1162,10 @@ int GetString(CGXByteBuffer& buff, CGXDataInfo& info, bool knownType, CGXDLMSVar
     else
     {
         value = "";
+    }
+    if (info.GetXml() != NULL)
+    {
+        info.GetXml()->AppendLine(info.GetXml()->GetDataType(info.GetType()), "", value.strVal);
     }
     return 0;
 }
@@ -1837,11 +1894,11 @@ static int SetDate(CGXByteBuffer& buff, CGXDLMSVariant& value)
         buff.SetUInt16(1900 + dt.tm_year);
     }
     // Add month
-    if (value.dateTime.GetDaylightSavingsBegin())
+    if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_DST_BEGIN) != 0)
     {
         buff.SetUInt8(0xFE);
     }
-    else if (value.dateTime.GetDaylightSavingsEnd())
+    else if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_DST_END) != 0)
     {
         buff.SetUInt8(0xFD);
     }
@@ -1854,7 +1911,15 @@ static int SetDate(CGXByteBuffer& buff, CGXDLMSVariant& value)
         buff.SetUInt8(dt.tm_mon + 1);
     }
     // Add day
-    if ((skip & DATETIME_SKIPS_DAY) != 0)
+    if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_LAST_DAY) != 0)
+    {
+        buff.SetUInt8(0xFE);
+    }
+    else if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_LAST_DAY2) != 0)
+    {
+        buff.SetUInt8(0xFD);
+    }
+    else if ((skip & DATETIME_SKIPS_DAY) != 0)
     {
         buff.SetUInt8(0xFF);
     }
@@ -1900,11 +1965,11 @@ static int SetDateTime(CGXByteBuffer& buff, CGXDLMSVariant& value)
     }
     buff.SetUInt16(year);
     //Add month
-    if (value.dateTime.GetDaylightSavingsBegin())
+    if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_DST_BEGIN) != 0)
     {
         buff.SetUInt8(0xFE);
     }
-    else if (value.dateTime.GetDaylightSavingsEnd())
+    else if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_DST_END) != 0)
     {
         buff.SetUInt8(0xFD);
     }
@@ -1917,7 +1982,15 @@ static int SetDateTime(CGXByteBuffer& buff, CGXDLMSVariant& value)
         buff.SetUInt8(0xFF);
     }
     //Add day
-    if (dt.tm_mday != -1 && (skip & DATETIME_SKIPS_DAY) == 0)
+    if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_LAST_DAY) != 0)
+    {
+        buff.SetUInt8(0xFE);
+    }
+    else if ((value.dateTime.GetExtra() & DATE_TIME_EXTRA_INFO_LAST_DAY2) != 0)
+    {
+        buff.SetUInt8(0xFD);
+    }
+    else if (dt.tm_mday != -1 && (skip & DATETIME_SKIPS_DAY) == 0)
     {
         buff.SetUInt8(dt.tm_mday);
     }
@@ -1988,7 +2061,12 @@ static int SetDateTime(CGXByteBuffer& buff, CGXDLMSVariant& value)
         buff.SetUInt16(value.dateTime.GetDeviation());
     }
     // Add clock_status
-    if (dt.tm_isdst)
+    if ((skip & DATETIME_SKIPS_STATUS) != 0)
+    {
+        // Status is not used.
+        buff.SetUInt8(0xFF);
+    }
+    else if (dt.tm_isdst)
     {
         buff.SetUInt8(value.dateTime.GetStatus() | DLMS_CLOCK_STATUS_DAYLIGHT_SAVE_ACTIVE);
     }
@@ -2068,7 +2146,7 @@ static int SetOctetString(CGXByteBuffer& buff, CGXDLMSVariant& value)
         return DLMS_ERROR_CODE_INVALID_PARAMETER;
     }
     return 0;
-}
+    }
 
 /**
 * Convert UTC string to DLMS bytes.

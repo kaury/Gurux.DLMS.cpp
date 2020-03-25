@@ -45,7 +45,6 @@ class CGXDLMSClient
 {
 protected:
     CGXDLMSSettings m_Settings;
-    bool m_AutoIncreaseInvokeID;
 private:
     bool m_IsAuthenticationRequired;
     static void UpdateOBISCodes(CGXDLMSObjectCollection& objects);
@@ -155,20 +154,57 @@ public:
      */
     void SetAutoIncreaseInvokeID(bool value);
 
+    // Gets used authentication.
+    DLMS_AUTHENTICATION GetAuthentication();
+
+    //Sets Used authentication.
+    void SetAuthentication(DLMS_AUTHENTICATION value);
+
+    // Gets client address.
+    unsigned long GetClientAddress();
+
+    // Sets client address.
+    void SetClientAddress(unsigned long value);
+
+    // Server address.
+    unsigned long GetServerAddress();
+
+    // Server address.
+    void SetServerAddress(unsigned long value);
+
     // Maximum client PDU size.
     unsigned short GetMaxPduSize();
 
+    /////////////////////////////////////////////////////////////////////////////
+    // Standard says that Time zone is from normal time to UTC in minutes.
+    // If meter is configured to use UTC time (UTC to normal time) set this to true.
+    bool GetUseUtc2NormalTime();
+    void SetUseUtc2NormalTime(bool value);
+
+    /////////////////////////////////////////////////////////////////////////////
+    //User id is the identifier of the user.
+    unsigned char GetUserID();
+    void SetUserID(unsigned char value);
+
+    /////////////////////////////////////////////////////////////////////////////
+    //Quality of service.
+    unsigned char GetQualityOfService();
+    void SetQualityOfService(unsigned char value);
+
+    /////////////////////////////////////////////////////////////////////////////
     //  Source system title.
     // Meter returns system title when ciphered connection is made or GMAC authentication is used.
     CGXByteBuffer& GetSourceSystemTitle();
 
 
+    /////////////////////////////////////////////////////////////////////////////
     // Maximum client PDU size.
     int SetMaxReceivePDUSize(unsigned short value);
     unsigned short GetMaxReceivePDUSize();
 
     CGXDLMSLimits& GetLimits();
 
+    /////////////////////////////////////////////////////////////////////////////
     // Collection of the objects.
     CGXDLMSObjectCollection& GetObjects();
 
@@ -460,6 +496,17 @@ public:
         std::vector<CGXByteBuffer>& reply);
 
     /**
+    * Write list of COSEM objects.
+    *
+    * @param list
+    *            DLMS objects to read.
+    * @return Write request as byte array.
+    */
+    int WriteList(
+        std::vector<std::pair<CGXDLMSObject*, unsigned char> >& list,
+        std::vector<CGXByteBuffer>& reply);
+
+    /**
     * Generates a write message.
     *
     * @param name
@@ -535,6 +582,49 @@ public:
         CGXDLMSVariant& data,
         std::vector<CGXByteBuffer>& reply);
 
+
+    /**
+    * Generate Method (Action) request.
+    *
+    * @param item
+    *            Method object short name or Logical Name.
+    * @param index
+    *            Method index.
+    * @param data
+    *            Method data.
+    * @param type
+    *            Data type.
+    * @return DLMS action message.
+    */
+    int Method(
+        CGXDLMSObject* item,
+        int index,
+        CGXDLMSVariant& data,
+        DLMS_DATA_TYPE dataType,
+        std::vector<CGXByteBuffer>& reply);
+
+    /**
+   * Generate Method (Action) request..
+   *
+   * @param name
+   *            Method object short name or Logical Name.
+   * @param objectType
+   *            Object type.
+   * @param methodIndex
+   *            Method index.
+   * @param value
+   *            Method data.
+   * @param dataType
+   *            Data type.
+   * @return DLMS action message.
+   */
+    int Method(
+        CGXDLMSVariant name,
+        DLMS_OBJECT_TYPE objectType,
+        int methodIndex,
+        CGXDLMSVariant& data,
+        std::vector<CGXByteBuffer>& reply);
+
     /**
     * Generate Method (Action) request..
     *
@@ -555,6 +645,7 @@ public:
         DLMS_OBJECT_TYPE objectType,
         int methodIndex,
         CGXDLMSVariant& data,
+        DLMS_DATA_TYPE dataType,
         std::vector<CGXByteBuffer>& reply);
 
     /**

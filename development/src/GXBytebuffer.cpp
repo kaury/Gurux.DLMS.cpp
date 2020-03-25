@@ -126,7 +126,15 @@ int CGXByteBuffer::Capacity(unsigned long capacity)
     }
     else
     {
-        unsigned char* tmp = (unsigned char*)realloc(m_Data, m_Capacity);
+        unsigned char* tmp;
+        if (m_Data == NULL)
+        {
+            tmp = (unsigned char*)malloc(m_Capacity);
+        }
+        else
+        {
+            tmp = (unsigned char*)realloc(m_Data, m_Capacity);
+        }
         //If not enought memory available.
         if (tmp == NULL)
         {
@@ -697,12 +705,16 @@ int CGXByteBuffer::SubArray(unsigned long index, int count, CGXByteBuffer& bb)
 
 int CGXByteBuffer::Move(unsigned long srcPos, unsigned long destPos, unsigned long count)
 {
-    if (m_Size < destPos + count)
-    {
-        return DLMS_ERROR_CODE_INVALID_PARAMETER;
-    }
     if (count != 0)
     {
+        if (destPos + count > m_Capacity)
+        {
+            int ret = Capacity(destPos + count);
+            if (ret != 0)
+            {
+                return ret;
+            }
+        }
         //Do not use memcpy here!
         memmove(m_Data + destPos, m_Data + srcPos, count);
         m_Size = (destPos + count);
@@ -766,7 +778,7 @@ CGXByteBuffer& CGXByteBuffer::operator=(CGXByteBuffer& value)
     m_Size = 0;
     if (value.GetSize() != 0)
     {
-        Set(&value, 0, (unsigned long)-1);
+        Set(value.m_Data, value.m_Size);
     }
     return *this;
 }
@@ -791,4 +803,25 @@ void CGXByteBuffer::SetHexString(char* value)
     std::string str = value;
     GXHelpers::HexToBytes(str, tmp);
     Set(&tmp);
+}
+
+bool CGXByteBuffer::IsAsciiString(unsigned char* value, unsigned long length)
+{
+    if (value != NULL)
+    {
+        for (unsigned long pos = 0; pos != length; ++pos)
+        {
+            unsigned char it = value[pos];
+            if ((it < 32 || it > 127) && it != '\r' && it != '\n' && it != 0)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool CGXByteBuffer::IsAsciiString()
+{
+    return IsAsciiString(m_Data, m_Size);
 }

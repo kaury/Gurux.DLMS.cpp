@@ -156,7 +156,7 @@ int GenerateApplicationContextName(
         data.Set(cipher->GetSystemTitle().GetData(), cipher->GetSystemTitle().GetSize());
     }
     //Add CallingAEInvocationId.
-    if (!settings.IsServer() && settings.GetUserID() != -1 && settings.GetCipher()->GetSecurity() != DLMS_SECURITY_NONE)
+    if (!settings.IsServer() && settings.GetUserID() != 0 && settings.GetCipher()->GetSecurity() != DLMS_SECURITY_NONE)
     {
         data.SetUInt8(BER_TYPE_CONTEXT | BER_TYPE_CONSTRUCTED | PDU_TYPE_CALLING_AE_INVOCATION_ID);
         //LEN
@@ -194,14 +194,22 @@ int GetInitiateRequest(
         data.SetUInt8(0x1);
         CGXByteBuffer& dedKey = settings.GetCipher()->GetDedicatedKey();
         GXHelpers::SetObjectCount(dedKey.GetSize(), data);
-        data.Set(&dedKey, 0, settings.GetCipher()->GetDedicatedKey().GetSize());
+        data.Set(&dedKey, 0, dedKey.GetSize());
     }
     // encoding of the response-allowed component (bool DEFAULT TRUE)
     // usage flag (FALSE, default value TRUE conveyed)
     data.SetUInt8(0);
 
     // Usage field of the proposed-quality-of-service component. Not used
-    data.SetUInt8(0x00);
+    if (settings.GetQualityOfService() == 0)
+    {
+        data.SetUInt8(0x00);
+    }
+    else
+    {
+        data.SetUInt8(0x01);
+        data.SetUInt8(settings.GetQualityOfService());
+    }
     data.SetUInt8(settings.GetDLMSVersion());
     // Tag for conformance block
     data.SetUInt8(0x5F);
@@ -256,22 +264,11 @@ int CGXAPDU::GenerateUserInformation(
         else
         {
             unsigned char cmd = DLMS_COMMAND_GLO_INITIATE_REQUEST;
-            CGXByteBuffer tmp, crypted;
+            CGXByteBuffer crypted;
             CGXByteBuffer& key = cipher->GetBlockCipherKey();
-            if ((ret = GetInitiateRequest(settings, cipher, tmp)) != 0)
+            if ((ret = GetInitiateRequest(settings, cipher, crypted)) != 0)
             {
                 return ret;
-            }
-            if ((settings.GetProposedConformance() & DLMS_CONFORMANCE_GENERAL_PROTECTION) != 0)
-            {
-                if (settings.GetCipher()->GetDedicatedKey().GetSize() == 0)
-                {
-                    cmd = DLMS_COMMAND_GENERAL_GLO_CIPHERING;
-                }
-                else
-                {
-                    cmd = DLMS_COMMAND_GENERAL_DED_CIPHERING;
-                }
             }
             if ((ret = cipher->Encrypt(cipher->GetSecurity(),
                 DLMS_COUNT_TYPE_PACKET,
@@ -279,8 +276,8 @@ int CGXAPDU::GenerateUserInformation(
                 cmd,
                 cipher->GetSystemTitle(),
                 key,
-                tmp,
-                crypted)) != 0)
+                crypted,
+                true)) != 0)
             {
                 return ret;
             }
@@ -546,15 +543,15 @@ int CGXAPDU::Parse(bool initiateRequest,
         {
             return ret;
         }
-        if (ch != 6)
-        {
-            //Invalid DLMS version number.
-            return DLMS_ERROR_CODE_INVALID_VERSION_NUMBER;
-        }
         if (xml != NULL && (initiateRequest || xml->GetOutputType() == DLMS_TRANSLATOR_OUTPUT_TYPE_SIMPLE_XML))
         {
             xml->IntegerToHex((long)ch, 2, str);
             xml->AppendLine(TRANSLATOR_GENERAL_TAGS_NEGOTIATED_DLMS_VERSION_NUMBER, "", str);
+        }
+        else if (ch != 6)
+        {
+            //Invalid DLMS version number.
+            return DLMS_ERROR_CODE_INVALID_VERSION_NUMBER;
         }
     }
 
@@ -1078,6 +1075,10 @@ int UpdatePassword(
             std::string str;
             if (settings.GetAuthentication() == DLMS_AUTHENTICATION_LOW)
             {
+                if (settings.GetPassword().IsAsciiString())
+                {
+                    xml->AppendComment(settings.GetPassword().ToString());
+                }
                 str = settings.GetPassword().ToHexString(false);
                 xml->AppendLine(TRANSLATOR_GENERAL_TAGS_CALLING_AUTHENTICATION,
                     "", str);
@@ -1215,16 +1216,14 @@ int CGXAPDU::GetUserInformation(
     }
     if (cipher != NULL && cipher->IsCiphered())
     {
-        CGXByteBuffer tmp(data);
-        data.Clear();
         return cipher->Encrypt(cipher->GetSecurity(),
             DLMS_COUNT_TYPE_PACKET,
             settings.GetCipher()->GetFrameCounter(),
             DLMS_COMMAND_GLO_INITIATE_RESPONSE,
             cipher->GetSystemTitle(),
             cipher->GetBlockCipherKey(),
-            tmp,
-            data);
+            data,
+            true);
     }
     return 0;
 }

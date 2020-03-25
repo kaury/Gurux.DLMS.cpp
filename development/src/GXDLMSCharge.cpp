@@ -86,15 +86,15 @@ void CGXDLMSCharge::GetValues(std::vector<std::string>& values)
     values.push_back(GXHelpers::IntToString(m_Proportion));
 }
 
-void CGXDLMSCharge::GetAttributeIndexToRead(std::vector<int>& attributes)
+void CGXDLMSCharge::GetAttributeIndexToRead(bool all, std::vector<int>& attributes)
 {
     //LN is static and read only once.
-    if (CGXDLMSObject::IsLogicalNameEmpty(m_LN))
+    if (all || CGXDLMSObject::IsLogicalNameEmpty(m_LN))
     {
         attributes.push_back(1);
     }
     //Value
-    if (CanRead(2))
+    if (all || CanRead(2))
     {
         attributes.push_back(2);
     }
@@ -132,7 +132,7 @@ int CGXDLMSCharge::GetDataType(int index, DLMS_DATA_TYPE& type)
         type = DLMS_DATA_TYPE_BIT_STRING;
         break;
     case 10:
-        type = DLMS_DATA_TYPE_OCTET_STRING;
+        type = DLMS_DATA_TYPE_DATETIME;
         break;
     case 11:
         type = DLMS_DATA_TYPE_INT32;
@@ -145,6 +145,19 @@ int CGXDLMSCharge::GetDataType(int index, DLMS_DATA_TYPE& type)
         break;
     default:
         return DLMS_ERROR_CODE_INVALID_PARAMETER;
+    }
+    return DLMS_ERROR_CODE_OK;
+}
+
+int CGXDLMSCharge::GetUIDataType(int index, DLMS_DATA_TYPE& type)
+{
+    if (index == 7 || index == 10)
+    {
+        type = DLMS_DATA_TYPE_DATETIME;
+    }
+    else
+    {
+        return CGXDLMSObject::GetUIDataType(index, type);
     }
     return DLMS_ERROR_CODE_OK;
 }
@@ -323,9 +336,13 @@ int CGXDLMSCharge::SetValue(CGXDLMSSettings& settings, CGXDLMSValueEventArg& e)
             }
             m_UnitChargeActivationTime = tmp.dateTime;
         }
-        else
+        else if (e.GetValue().vt == DLMS_DATA_TYPE_DATETIME)
         {
             m_UnitChargeActivationTime = e.GetValue().dateTime;
+        }
+        else
+        {
+            m_UnitChargeActivationTime.Reset();
         }
         break;
     case 8:

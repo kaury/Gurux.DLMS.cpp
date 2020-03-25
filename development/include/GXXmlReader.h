@@ -32,48 +32,53 @@
 // Full text may be retrieved at http://www.gnu.org/licenses/gpl-2.0.txt
 //---------------------------------------------------------------------------
 
-#ifndef GXSECURE_H
-#define GXSECURE_H
+#ifndef GX_XML_READER_H
+#define GX_XML_READER_H
 
-#include "../include/enums.h"
-#include "../include/GXBytebuffer.h"
-#include "../include/GXDLMSSettings.h"
+#include <vector>
+#include <string>
 
-class CGXSecure
+class CGXXmlReader
 {
+    enum XML_EVENT_TYPE
+    {
+        XML_EVENT_TYPE_NONE,
+        XML_EVENT_TYPE_START_ELEMENT,
+        XML_EVENT_TYPE_END_ELEMENT,
+        XML_EVENT_TYPE_COMMENT,
+        XML_EVENT_TYPE_SPACE,
+        XML_EVENT_TYPE_CHARACTERS
+    };
+    XML_EVENT_TYPE m_EventType;
+    int m_Index;
+    int m_Size;
+    std::string m_Name;
+    std::string m_Value;
+    char m_Buffer[256];
+    FILE* m_f;
 public:
-    /**
-    * Generates challenge.
-    *
-    * @param authentication
-    *            Used authentication.
-    * @return Generated challenge.
-    */
-    static int GenerateChallenge(
-        DLMS_AUTHENTICATION authentication,
-        CGXByteBuffer& challenge);
+    //Constructor.
+    CGXXmlReader(FILE* f);
 
-    /**
-    * Chipher text.
-    *
-    * @param auth
-    *            Authentication level.
-    * @param data
-    *            Text to chipher.
-    * @param secret
-    *            Secret.
-    * @return Chiphered text.
-    */
-    static int Secure(
-        CGXDLMSSettings& settings,
-        CGXCipher* cipher,
-        unsigned long ic,
-        CGXByteBuffer& data,
-        CGXByteBuffer& secret,
-        CGXByteBuffer& reply);
+    bool IsEOF();
 
-    static int EncryptAesKeyWrapping(CGXByteBuffer& data, CGXByteBuffer& kek, CGXByteBuffer& reply);
-    static int DecryptAesKeyWrapping(CGXByteBuffer& data, CGXByteBuffer& kek, CGXByteBuffer& reply);
+    bool Read();
+
+    bool IsStartElement();
+
+    std::string& GetText();
+
+    void GetNext();
+
+    std::string& ReadElementContentAsString(const char* name);
+
+    std::string& ReadElementContentAsString(const char* name, const char* defaultValue);
+
+    int ReadElementContentAsInt(const char* name);
+
+    int ReadElementContentAsInt(const char* name, int defaultValue);
+
+    std::string& GetName();
 };
 
-#endif //GXSECURE_H
+#endif //GX_XML_READER_H

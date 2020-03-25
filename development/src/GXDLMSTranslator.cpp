@@ -53,13 +53,13 @@ CGXDLMSTranslator::CGXDLMSTranslator(DLMS_TRANSLATOR_OUTPUT_TYPE type)
     m_RSendSequence = 0;
     m_RReceiveSequence = 0;
     m_Comments = false;
-    m_PduOnly = false;;
-    m_CompletePdu = false;;
-    m_Hex = false;;
-    m_ShowStringAsHex = false;;
-    m_OmitXmlDeclaration = false;;
-    m_OmitXmlNameSpace = false;;
-    m_MultipleFrames = false;;
+    m_PduOnly = false;
+    m_CompletePdu = false;
+    m_Hex = false;
+    m_ShowStringAsHex = false;
+    m_OmitXmlDeclaration = false;
+    m_OmitXmlNameSpace = false;
+    m_MultipleFrames = false;
     if (type == DLMS_TRANSLATOR_OUTPUT_TYPE_SIMPLE_XML)
     {
         m_Hex = true;
@@ -190,17 +190,17 @@ void CGXDLMSTranslator::SetFrameCounter(unsigned long value)
     m_FrameCounter = value;
 }
 
-void CGXDLMSTranslator::GetCiphering(CGXDLMSSettings& settings)
+void CGXDLMSTranslator::GetCiphering(CGXDLMSSettings& settings, bool force)
 {
-    if (m_Security != DLMS_SECURITY_NONE)
+    if (force || m_Security != DLMS_SECURITY_NONE)
     {
         CGXCipher* c = settings.GetCipher();
-        settings.GetCipher()->SetSystemTitle(m_SystemTitle);
         c->SetSecurity(m_Security);
         c->SetSystemTitle(m_SystemTitle);
         c->SetBlockCipherKey(m_BlockCipherKey);
         c->SetAuthenticationKey(m_AuthenticationKey);
         c->SetFrameCounter(m_FrameCounter);
+        c->SetDedicatedKey(m_DedicatedKey);
         settings.SetSourceSystemTitle(m_ServerSystemTitle);
     }
     else
@@ -279,7 +279,6 @@ int GetUa(CGXByteBuffer& data, CGXDLMSTranslatorStructure* xml)
         {
         case HDLC_INFO_MAX_INFO_TX:
             xml->AppendLine("<MaxInfoTX Value=\"" + value.ToString() + "\" />");
-            //limits->SetMaxInfoRX((unsigned char)value.ToInteger());
             break;
         case HDLC_INFO_MAX_INFO_RX:
             xml->AppendLine("<MaxInfoRX Value=\"" + value.ToString() + "\" />");
@@ -298,6 +297,35 @@ int GetUa(CGXByteBuffer& data, CGXDLMSTranslatorStructure* xml)
     return ret;
 }
 
+bool IsCiphered(unsigned char cmd)
+{
+    switch (cmd)
+    {
+    case DLMS_COMMAND_GLO_READ_REQUEST:
+    case DLMS_COMMAND_GLO_WRITE_REQUEST:
+    case DLMS_COMMAND_GLO_GET_REQUEST:
+    case DLMS_COMMAND_GLO_SET_REQUEST:
+    case DLMS_COMMAND_GLO_READ_RESPONSE:
+    case DLMS_COMMAND_GLO_WRITE_RESPONSE:
+    case DLMS_COMMAND_GLO_GET_RESPONSE:
+    case DLMS_COMMAND_GLO_SET_RESPONSE:
+    case DLMS_COMMAND_GLO_METHOD_REQUEST:
+    case DLMS_COMMAND_GLO_METHOD_RESPONSE:
+    case DLMS_COMMAND_DED_GET_REQUEST:
+    case DLMS_COMMAND_DED_SET_REQUEST:
+    case DLMS_COMMAND_DED_READ_RESPONSE:
+    case DLMS_COMMAND_DED_GET_RESPONSE:
+    case DLMS_COMMAND_DED_SET_RESPONSE:
+    case DLMS_COMMAND_DED_METHOD_REQUEST:
+    case DLMS_COMMAND_DED_METHOD_RESPONSE:
+    case DLMS_COMMAND_GENERAL_GLO_CIPHERING:
+    case DLMS_COMMAND_GENERAL_DED_CIPHERING:
+        return true;
+    default:
+        return false;
+    }
+}
+
 int CGXDLMSTranslator::PduToXml(CGXDLMSTranslatorStructure* xml, CGXByteBuffer& value, bool omitDeclaration, bool omitNameSpace, bool allowUnknownCommand, std::string& output)
 {
     DLMS_ASSOCIATION_RESULT result;
@@ -309,11 +337,11 @@ int CGXDLMSTranslator::PduToXml(CGXDLMSTranslatorStructure* xml, CGXByteBuffer& 
     unsigned long len;
     CGXDLMSSettings settings(true);
     output.clear();
-    GetCiphering(settings);
     if ((ret = value.GetUInt8(&cmd)) != 0)
     {
         return ret;
     }
+    GetCiphering(settings, IsCiphered(cmd));
     CGXByteBuffer tmp;
     switch (cmd)
     {
@@ -329,7 +357,7 @@ int CGXDLMSTranslator::PduToXml(CGXDLMSTranslatorStructure* xml, CGXByteBuffer& 
     {
         value.SetPosition(0);
         CGXDLMSSettings s(false);
-        GetCiphering(s);
+        GetCiphering(s, false);
         CGXAPDU::ParseInitiate(true, s, s.GetCipher(), value,
             xml);
     }
@@ -342,7 +370,7 @@ int CGXDLMSTranslator::PduToXml(CGXDLMSTranslatorStructure* xml, CGXByteBuffer& 
     {
         value.SetPosition(0);
         CGXDLMSSettings s(false);
-        GetCiphering(s);
+        GetCiphering(s, false);
         CGXAPDU::ParsePDU(s, s.GetCipher(), value, result, diagnostic, xml);
     }
     break;
@@ -653,6 +681,7 @@ int CGXDLMSTranslator::PduToXml(CGXDLMSTranslatorStructure* xml, CGXByteBuffer& 
             return DLMS_ERROR_CODE_INVALID_COMMAND;
         }
         str = "<Data=\"";
+        value.SetPosition(value.GetPosition() - 1);
         str.append(value.ToHexString(value.GetPosition(), value.Available(), false));
         str.append("\" />");
         xml->AppendLine(str);
@@ -731,4 +760,26 @@ int CGXDLMSTranslator::DataToXml(CGXByteBuffer& data, std::string& xml)
     ret = GXHelpers::GetData(data, di, value);
     xml = di.GetXml()->ToString();
     return ret;
+}
+
+CGXByteBuffer& CGXDLMSTranslator::GetServerSystemTitle()
+{
+    return m_ServerSystemTitle;
+}
+
+void CGXDLMSTranslator::SetServerSystemTitle(CGXByteBuffer& value)
+{
+    m_ServerSystemTitle.Clear();
+    m_ServerSystemTitle.Set(value.GetData(), value.GetSize() - value.GetPosition());
+}
+
+CGXByteBuffer& CGXDLMSTranslator::GetDedicatedKey()
+{
+    return m_DedicatedKey;
+}
+
+void CGXDLMSTranslator::SetDedicatedKey(CGXByteBuffer& value)
+{
+    m_DedicatedKey.Clear();
+    m_DedicatedKey.Set(value.GetData(), value.GetSize() - value.GetPosition());
 }

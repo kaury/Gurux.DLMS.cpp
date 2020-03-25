@@ -537,7 +537,7 @@ unsigned char GetGloMessage(DLMS_COMMAND command)
     return cmd;
 }
 
-unsigned char GetInvokeIDPriority(CGXDLMSSettings& settings)
+unsigned char GetInvokeIDPriority(CGXDLMSSettings& settings, bool increase)
 {
     unsigned char value = 0;
     if (settings.GetPriority() == DLMS_PRIORITY_HIGH)
@@ -547,6 +547,10 @@ unsigned char GetInvokeIDPriority(CGXDLMSSettings& settings)
     if (settings.GetServiceClass() == DLMS_SERVICE_CLASS_CONFIRMED)
     {
         value |= 0x40;
+    }
+    if (increase)
+    {
+        settings.SetInvokeID((unsigned char)((settings.GetInvokeID() + 1) & 0xF));
     }
     value |= settings.GetInvokeID() & 0xF;
     return value;
@@ -658,8 +662,9 @@ int Cipher0(CGXDLMSLNParameters& p,
         if ((p.GetSettings()->GetProposedConformance() & DLMS_CONFORMANCE_GENERAL_PROTECTION) == 0
             && (p.GetSettings()->GetNegotiatedConformance() & DLMS_CONFORMANCE_GENERAL_PROTECTION) == 0)
         {
-            if ((p.GetSettings()->GetConnected() & DLMS_CONNECTION_STATE_DLMS) != 0
-                && p.GetSettings()->GetCipher()->GetDedicatedKey().GetSize() != 0)
+            if (p.GetSettings()->GetCipher()->GetDedicatedKey().GetSize() != 0 &&
+                (!p.GetSettings()->IsServer() ||
+                (p.GetSettings()->GetConnected() & DLMS_CONNECTION_STATE_DLMS) != 0))
             {
                 cmd = GetDedMessage(p.GetCommand());
                 key = &p.GetSettings()->GetCipher()->GetDedicatedKey();
@@ -714,14 +719,12 @@ int Cipher0(CGXDLMSLNParameters& p,
         cmd,
         title,
         *key,
-        reply, tmp);
-    p.GetSettings()->GetCipher()->SetFrameCounter(p.GetSettings()->GetCipher()->GetFrameCounter() + 1);
+        reply,
+        true);
     if (ret != 0)
     {
         return ret;
     }
-    reply.SetSize(0);
-    reply.Set(&tmp, 0, tmp.GetSize());
     return 0;
 }
 
@@ -771,14 +774,17 @@ int CGXDLMS::GetLNPdu(
             }
             else
             {
-                // Data is send in octet string. Remove data type.
+                // Data is send in octet string. Remove data type except from event Notification.
                 int pos = reply.GetSize();
                 CGXDLMSVariant tmp = *p.GetTime();
                 if ((ret = GXHelpers::SetData(reply, DLMS_DATA_TYPE_OCTET_STRING, tmp)) != 0)
                 {
                     return ret;
                 }
-                reply.Move(pos + 1, pos, reply.GetSize() - pos - 1);
+                if (p.GetCommand() != DLMS_COMMAND_EVENT_NOTIFICATION)
+                {
+                    reply.Move(pos + 1, pos, reply.GetSize() - pos - 1);
+                }
             }
         }
         else if (p.GetCommand() != DLMS_COMMAND_RELEASE_REQUEST)
@@ -827,7 +833,7 @@ int CGXDLMS::GetLNPdu(
                 }
                 else
                 {
-                    reply.SetUInt8(GetInvokeIDPriority(*p.GetSettings()));
+                    reply.SetUInt8(GetInvokeIDPriority(*p.GetSettings(), p.GetSettings()->GetAutoIncreaseInvokeID()));
                 }
             }
         }
@@ -1035,6 +1041,7 @@ int CGXDLMS::GetLnMessages(
             tmp.Clear();
         }
         reply.Clear();
+        frame = 0;
     } while (ret == 0 && p.GetData() != NULL && p.GetData()->GetPosition() != p.GetData()->GetSize());
     return ret;
 }
@@ -1111,7 +1118,7 @@ int CGXDLMS::GetSNPdu(
     {
         cnt = p.GetData()->GetSize() - p.GetData()->GetPosition();
     }
-    // Add DLMS_COMMAND_
+    // Add DLMS command.
     if (p.GetCommand() == DLMS_COMMAND_INFORMATION_REPORT)
     {
         reply.SetUInt8(p.GetCommand());
@@ -1214,17 +1221,16 @@ int CGXDLMS::GetSNPdu(
             GetGloMessage(p.GetCommand()),
             p.GetSettings()->GetCipher()->GetSystemTitle(),
             p.GetSettings()->GetCipher()->GetAuthenticationKey(),
-            reply, tmp);
+            reply,
+            true);
         if (ret != 0)
         {
             return ret;
         }
-        reply.SetSize(0);
         if (p.GetSettings()->GetInterfaceType() == DLMS_INTERFACE_TYPE_HDLC)
         {
             AddLLCBytes(p.GetSettings(), reply);
         }
-        reply.Set(&tmp, 0, tmp.GetSize());
     }
     return 0;
 }
@@ -1236,13 +1242,10 @@ int CGXDLMS::GetSnMessages(
     int ret;
     CGXByteBuffer data, reply;
     unsigned char frame = 0x0;
-    if (p.GetCommand() == DLMS_COMMAND_INFORMATION_REPORT)
+    if (p.GetCommand() == DLMS_COMMAND_INFORMATION_REPORT ||
+        p.GetCommand() == DLMS_COMMAND_DATA_NOTIFICATION)
     {
         frame = 0x13;
-    }
-    else if (p.GetCommand() == DLMS_COMMAND_NONE)
-    {
-        frame = p.GetSettings()->GetNextSend(1);
     }
     do
     {
@@ -1259,14 +1262,7 @@ int CGXDLMS::GetSnMessages(
                 ret = GetHdlcFrame(*p.GetSettings(), frame, &data, reply);
                 if (data.GetPosition() != data.GetSize())
                 {
-                    if (p.GetSettings()->IsServer())
-                    {
-                        frame = 0;
-                    }
-                    else
-                    {
-                        frame = p.GetSettings()->GetNextSend(0);
-                    }
+                    frame = p.GetSettings()->GetNextSend(0);
                 }
             }
             if (ret != 0)
@@ -1277,6 +1273,7 @@ int CGXDLMS::GetSnMessages(
             reply.Clear();
         }
         reply.Clear();
+        frame = 0;
     } while (ret == 0 && p.GetData() != NULL && p.GetData()->GetPosition() != p.GetData()->GetSize());
     return 0;
 }
@@ -1692,7 +1689,10 @@ int CGXDLMS::CheckHdlcAddress(
             return DLMS_ERROR_CODE_FALSE;
         }
         // Check that server addresses match.
-        if (settings.GetServerAddress() != source)
+        if (settings.GetServerAddress() != source &&
+            //If All-station (Broadcast).
+            settings.GetServerAddress() != 0x7F &&
+            settings.GetServerAddress() != 0x3FFF)
         {
             //Check logical and physical address separately.
             //This is done because some meters might send four bytes
@@ -1814,6 +1814,16 @@ int HandleActionResponseNormal(
     return 0;
 }
 
+int VerifyInvokeId(CGXDLMSSettings& settings, CGXReplyData& reply)
+{
+    if (reply.GetXml() == NULL && settings.GetAutoIncreaseInvokeID() && reply.GetInvokeId() != GetInvokeIDPriority(settings, false))
+    {
+        //Invalid invoke ID.
+        return DLMS_ERROR_CODE_INVALID_INVOKE_ID;
+    }
+    return 0;
+}
+
 int CGXDLMS::HandleMethodResponse(
     CGXDLMSSettings& settings,
     CGXReplyData& data)
@@ -1827,6 +1837,11 @@ int CGXDLMS::HandleMethodResponse(
     }
     // Get invoke ID and priority.
     if ((ret = data.GetData().GetUInt8(&invoke)) != 0)
+    {
+        return ret;
+    }
+    data.SetInvokeId(invoke);
+    if ((ret = VerifyInvokeId(settings, data)) != 0)
     {
         return ret;
     }
@@ -1879,7 +1894,6 @@ int CGXDLMS::HandleAccessResponse(
     std::string str;
     unsigned char ch;
     unsigned long invokeId, len;
-    //TODO: int start = reply.GetData().GetPosition() - 1;
     //Get invoke id.
     if ((ret = reply.GetData().GetUInt32(&invokeId)) != 0)
     {
@@ -2080,6 +2094,11 @@ int CGXDLMS::HandleSetResponse(
     }
     //Invoke ID and priority.
     if ((ret = data.GetData().GetUInt8(&invokeId)) != 0)
+    {
+        return ret;
+    }
+    data.SetInvokeId(invokeId);
+    if ((ret = VerifyInvokeId(settings, data)) != 0)
     {
         return ret;
     }
@@ -2345,15 +2364,31 @@ int CGXDLMS::HandleGloDedRequest(CGXDLMSSettings& settings,
             int ret;
             unsigned char ch;
             data.GetData().SetPosition(data.GetData().GetPosition() - 1);
-            if ((ret = settings.GetCipher()->Decrypt(settings.GetSourceSystemTitle(),
-                settings.GetCipher()->GetBlockCipherKey(), data.GetData(), security, suite)) != 0)
+            if (settings.GetCipher()->GetDedicatedKey().GetSize() != 0 &&
+                (settings.IsServer() || settings.GetConnected() & DLMS_CONNECTION_STATE_DLMS) != 0)
             {
-                return ret;
+                if ((ret = settings.GetCipher()->Decrypt(settings.GetSourceSystemTitle(),
+                    settings.GetCipher()->GetDedicatedKey(), data.GetData(), security, suite)) != 0)
+                {
+                    return ret;
+                }
+            }
+            //If pre-set connection is made.
+            else if (settings.GetSourceSystemTitle().GetSize() == 0)
+            {
+
+            }
+            else
+            {
+                if ((ret = settings.GetCipher()->Decrypt(settings.GetSourceSystemTitle(),
+                    settings.GetCipher()->GetBlockCipherKey(), data.GetData(), security, suite)) != 0)
+                {
+                    return ret;
+                }
             }
             settings.GetCipher()->SetSecuritySuite(suite);
             settings.GetCipher()->SetSecurity(security);
-
-            // Get DLMS_COMMAND_
+            // Get command.
             data.SetCipheredCommand(data.GetCommand());
             data.GetData().GetUInt8(&ch);
             data.SetCommand((DLMS_COMMAND)ch);
@@ -2414,9 +2449,13 @@ int CGXDLMS::HandleGloDedResponse(
             {
                 return ret;
             }
-            data.GetData().Set(&bb);
+            data.GetData().Set(&bb, bb.GetPosition());
+            data.SetCipheredCommand(data.GetCommand());
             data.SetCommand(DLMS_COMMAND_NONE);
-            GetPdu(settings, data);
+            if ((ret = GetPdu(settings, data)) != 0)
+            {
+                return ret;
+            }
             data.SetCipherIndex((unsigned short)data.GetData().GetSize());
         }
     }
@@ -2437,7 +2476,11 @@ int CGXDLMS::HandleGeneralCiphering(
     // If all frames are read.
     if ((data.GetMoreData() & DLMS_DATA_REQUEST_TYPES_FRAME) == 0)
     {
-        int origPos = data.GetXml()->GetXmlLength();
+        int origPos = 0;
+        if (data.GetXml() != NULL)
+        {
+            origPos = data.GetXml()->GetXmlLength();
+        }
         data.GetData().SetPosition(data.GetData().GetPosition() - 1);
         DLMS_SECURITY security;
         DLMS_SECURITY_SUITE suite;
@@ -2637,7 +2680,8 @@ int CGXDLMS::GetPdu(
             ret = HandleGeneralCiphering(settings, data);
             break;
         default:
-            // Invalid DLMS DLMS_COMMAND_
+            // Invalid DLMS command.
+            data.SetCommand(DLMS_COMMAND_NONE);
             return DLMS_ERROR_CODE_INVALID_PARAMETER;
         }
     }
@@ -2662,7 +2706,7 @@ int CGXDLMS::GetPdu(
         {
             data.GetData().SetPosition(data.GetCipherIndex() + 1);
             ret = HandleGbt(settings, data);
-            data.SetCipherIndex(data.GetData().GetSize());
+            data.SetCipherIndex((unsigned short)data.GetData().GetSize());
             data.SetCommand(DLMS_COMMAND_NONE);
         }
         // Get command if operating as a server.
@@ -2696,6 +2740,13 @@ int CGXDLMS::GetPdu(
             case DLMS_COMMAND_GLO_GET_RESPONSE:
             case DLMS_COMMAND_GLO_SET_RESPONSE:
             case DLMS_COMMAND_GLO_METHOD_RESPONSE:
+            case DLMS_COMMAND_GLO_GENERAL_CIPHERING:
+            case DLMS_COMMAND_DED_READ_RESPONSE:
+            case DLMS_COMMAND_DED_WRITE_RESPONSE:
+            case DLMS_COMMAND_DED_GET_RESPONSE:
+            case DLMS_COMMAND_DED_SET_RESPONSE:
+            case DLMS_COMMAND_DED_METHOD_RESPONSE:
+            case DLMS_COMMAND_GENERAL_DED_CIPHERING:
                 data.GetData().SetPosition(data.GetCipherIndex());
                 ret = GetPdu(settings, data);
                 break;
@@ -2779,6 +2830,30 @@ int CGXDLMS::GetData(CGXDLMSSettings& settings,
         return DLMS_ERROR_CODE_OK;
     }
     ret = GetPdu(settings, *target);
+
+    if (ret == 0 && !isNotify)
+    {
+        CGXByteBuffer& d = data.GetData();
+        //Check command to make sure it's not notify message.
+        switch (target->GetCommand())
+        {
+        case DLMS_COMMAND_DATA_NOTIFICATION:
+        case DLMS_COMMAND_GLO_EVENT_NOTIFICATION_REQUEST:
+        case DLMS_COMMAND_INFORMATION_REPORT:
+        case DLMS_COMMAND_EVENT_NOTIFICATION:
+        case DLMS_COMMAND_DED_EVENT_NOTIFICATION:
+            isNotify = true;
+            notify->SetCommand(data.GetCommand());
+            data.SetCommand(DLMS_COMMAND_NONE);
+            notify->SetTime(data.GetTime());
+            data.SetTime(0);
+            notify->GetData().Set(&d, d.GetPosition(), d.GetSize() - d.GetPosition());
+            data.GetData().Trim();
+            break;
+        default:
+            break;
+        }
+    }
     if (ret == 0 && isNotify)
     {
         return DLMS_ERROR_CODE_FALSE;
@@ -2855,6 +2930,12 @@ int CGXDLMS::HandleGetResponse(
     {
         return ret;
     }
+    // Get invoke ID and priority.
+    reply.SetInvokeId(ch);
+    if ((ret = VerifyInvokeId(settings, reply)) != 0)
+    {
+        return ret;
+    }
     if (reply.GetXml() != NULL)
     {
         reply.GetXml()->AppendStartTag(DLMS_COMMAND_GET_RESPONSE);
@@ -2926,6 +3007,16 @@ int CGXDLMS::HandleGetResponse(
         {
             return ret;
         }
+        if (reply.GetXml() != NULL)
+        {
+            //Result start tag.
+            reply.GetXml()->AppendStartTag(DLMS_TRANSLATOR_TAGS_RESULT);
+            //LastBlock
+            std::string str;
+            reply.GetXml()->IntegerToHex((unsigned long)ch, 2, str);
+            reply.GetXml()->AppendLine(DLMS_TRANSLATOR_TAGS_LAST_BLOCK, "Value", str);
+        }
+
         if (ch == 0)
         {
             reply.SetMoreData(
@@ -2941,16 +3032,26 @@ int CGXDLMS::HandleGetResponse(
         {
             return ret;
         }
-        // If meter's block index is zero based or Actaris is read.
-        // Actaris SL7000 might return wrong block index sometimes.
-        // It's not reseted to 1.
-        if (number != 1 && settings.GetBlockIndex() == 1)
+        if (reply.GetXml() != NULL)
         {
-            settings.SetBlockIndex(number);
+            //BlockNumber
+            std::string str;
+            reply.GetXml()->IntegerToHex(number, 8, str);
+            reply.GetXml()->AppendLine(DLMS_TRANSLATOR_TAGS_BLOCK_NUMBER, "Value", str);
         }
-        if (number != settings.GetBlockIndex())
+        else
         {
-            return DLMS_ERROR_CODE_DATA_BLOCK_NUMBER_INVALID;
+            // If meter's block index is zero based or Actaris is read.
+            // Actaris SL7000 might return wrong block index sometimes.
+            // It's not reseted to 1.
+            if (number != 1 && settings.GetBlockIndex() == 1)
+            {
+                settings.SetBlockIndex(number);
+            }
+            if (number != settings.GetBlockIndex())
+            {
+                return DLMS_ERROR_CODE_DATA_BLOCK_NUMBER_INVALID;
+            }
         }
         // Get status.
         if ((ret = data.GetUInt8(&ch)) != 0)
@@ -2995,8 +3096,8 @@ int CGXDLMS::HandleGetResponse(
             if (!reply.GetPeek())
             {
                 data.SetPosition(0);
-                settings.ResetBlockIndex();
             }
+            settings.ResetBlockIndex();
         }
         if (reply.GetMoreData() == DLMS_DATA_REQUEST_TYPES_NONE &&
             settings.GetCommand() == DLMS_COMMAND_GET_REQUEST
@@ -3701,7 +3802,7 @@ int CGXDLMS::GetActionInfo(DLMS_OBJECT_TYPE objectType, unsigned char& value, un
         value = 0x38;
         count = 1;
         break;
-    case DLMS_OBJECT_TYPE_DLMS_SECURITY_SETUP:
+    case DLMS_OBJECT_TYPE_SECURITY_SETUP:
         value = 0x30;
         count = 8;
         break;
@@ -3823,10 +3924,10 @@ int CGXDLMS::ParseSnrmUaResponse(
         switch (id)
         {
         case HDLC_INFO_MAX_INFO_TX:
-            limits->SetMaxInfoRX((unsigned char)value.ToInteger());
+            limits->SetMaxInfoRX((unsigned short)value.ToInteger());
             break;
         case HDLC_INFO_MAX_INFO_RX:
-            limits->SetMaxInfoTX((unsigned char)value.ToInteger());
+            limits->SetMaxInfoTX((unsigned short)value.ToInteger());
             break;
         case HDLC_INFO_WINDOW_SIZE_TX:
             limits->SetWindowSizeRX((unsigned char)value.ToInteger());

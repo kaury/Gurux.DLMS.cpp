@@ -58,9 +58,37 @@ enum DATETIME_SKIPS
     DATETIME_SKIPS_SECOND = 0x40,
     // Hundreds of seconds part of date time is skipped.
     DATETIME_SKIPS_MS = 0x80,
-    //Devitation is skipped on write.
-    DATETIME_SKIPS_DEVITATION = 0x100
+    //Devitation is skipped.
+    DATETIME_SKIPS_DEVITATION = 0x100,
+    //Status is skipped.
+    DATETIME_SKIPS_STATUS = 0x200
 };
+
+// DataType extra info.
+enum DATE_TIME_EXTRA_INFO
+{
+    // No extra info.
+    DATE_TIME_EXTRA_INFO_NONE = 0x0,
+    // Daylight savings begin.
+    DATE_TIME_EXTRA_INFO_DST_BEGIN = 0x1,
+    //Daylight savings end.
+    DATE_TIME_EXTRA_INFO_DST_END = 0x2,
+    // Last day of month.
+    DATE_TIME_EXTRA_INFO_LAST_DAY = 0x4,
+    // 2nd last day of month
+    DATE_TIME_EXTRA_INFO_LAST_DAY2 = 0x8,
+};
+
+
+//Constants for different orders of date components.
+typedef enum
+{
+    GXDLMS_DATE_FORMAT_INVALID = -1,
+    GXDLMS_DATE_FORMAT_DMY = 0,
+    GXDLMS_DATE_FORMAT_MDY = 1,
+    GXDLMS_DATE_FORMAT_YMD = 2,
+    GXDLMS_DATE_FORMAT_YDM = 3
+} GXDLMS_DATE_FORMAT;
 
 // This class is used because in COSEM object model some fields from date time can be ignored.
 // Default behavior of DateTime do not allow this.
@@ -71,10 +99,25 @@ class CGXDateTime
     short m_Deviation;
     DATETIME_SKIPS m_Skip;
     struct tm m_Value;
-    bool m_DaylightSavingsBegin;
-    bool m_DaylightSavingsEnd;
+    DATE_TIME_EXTRA_INFO m_Extra;
     DLMS_CLOCK_STATUS m_Status;
     void Init(int year, int month, int day, int hour, int minute, int second, int millisecond, int devitation);
+    //Get date format.
+    int GetDateFormat2(
+        GXDLMS_DATE_FORMAT& format,
+        char& separator);
+
+    //Get time format.
+    int GetTimeFormat2(
+        char& separator,
+        char& use24HourClock);
+
+    int GetDateTimeFormat(
+        std::string& value,
+        GXDLMS_DATE_FORMAT& format,
+        char& dateSeparator,
+        char& timeSeparator,
+        char& use24HourClock);
 public:
     // Constructor.
     CGXDateTime();
@@ -90,6 +133,18 @@ public:
     // Constructor.
     CGXDateTime(int year, int month, int day, int hour, int minute, int second, int millisecond, int devitation);
 
+    /////////////////////////////////////////////////////////////////////////
+    //Get system date-time format.
+    static void GetSystemDateTimeFormat(std::string& value);
+
+    //Destructor.
+    virtual ~CGXDateTime();
+
+    // Get date time from string.
+    int FromString(const char* value);
+
+    int ToFormatString(std::string& value);
+
     // Used date time value.
     struct tm& GetValue();
     void SetValue(const struct tm& value);
@@ -102,13 +157,9 @@ public:
     //Get currect time.
     static CGXDateTime Now();
 
-    // Daylight savings begin.
-    bool GetDaylightSavingsBegin();
-    void SetDaylightSavingsBegin(bool value);
-
-    // Daylight savings end.
-    bool GetDaylightSavingsEnd();
-    void SetDaylightSavingsEnd(bool value);
+    // Date time extra information.
+    DATE_TIME_EXTRA_INFO GetExtra();
+    void SetExtra(DATE_TIME_EXTRA_INFO value);
 
     // Get deviation.
     int GetDeviation();
@@ -119,6 +170,16 @@ public:
     // Status of the clock.
     DLMS_CLOCK_STATUS GetStatus();
     void SetStatus(DLMS_CLOCK_STATUS value);
+
+    /**
+    * Reset date and time fields.
+    */
+    void Reset();
+
+    /**
+    * Reset date fields.
+    */
+    void ResetDate();
 
     /**
     * Set time to midnight.
@@ -172,7 +233,7 @@ public:
     static short GetCurrentTimeZone();
 
     //Get currect deviation.
-    static char GetCurrentDeviation();  
+    static char GetCurrentDeviation();
 
     unsigned long ToUnixTime();
 };

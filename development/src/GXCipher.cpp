@@ -77,37 +77,6 @@ CGXCipher::~CGXCipher()
 {
 }
 
-
-int CGXCipher::GetAuthenticatedData(
-    DLMS_SECURITY security,
-    CGXByteBuffer& authenticationKey,
-    CGXByteBuffer& plainText,
-    CGXByteBuffer& result)
-{
-    result.Clear();
-    if (security == DLMS_SECURITY_AUTHENTICATION)
-    {
-        result.SetUInt8(security);
-        result.Set(&authenticationKey, 0, -1);
-        result.Set(plainText.m_Data + plainText.GetPosition(),
-            plainText.GetSize() - plainText.GetPosition());
-    }
-    else if (security == DLMS_SECURITY_ENCRYPTION)
-    {
-        result.Set(&authenticationKey, 0, -1);
-    }
-    else if (security == DLMS_SECURITY_AUTHENTICATION_ENCRYPTION)
-    {
-        result.SetUInt8(security);
-        result.Set(&authenticationKey, 0, -1);
-    }
-    else
-    {
-        return DLMS_ERROR_CODE_INVALID_PARAMETER;
-    }
-    return 0;
-}
-
 /**
 * Get nonse from frame counter and system title.
 *
@@ -255,7 +224,7 @@ const unsigned long Te0[256] = {
 
 #define TE444(i) ((Te0[(i) & 0xff] >> 8) & 0x000000ff)
 
-int CGXCipher::Int(unsigned long* rk,
+int CGXCipher::Int(uint32_t* rk,
     const unsigned char* cipherKey,
     unsigned short keyBits)
 {
@@ -333,8 +302,8 @@ int CGXCipher::Int(unsigned long* rk,
 }
 
 void CGXCipher::AesEncrypt(
-    const unsigned long* rk,
-    int Nr,
+    const unsigned int* rk,
+    unsigned int Nr,
     const unsigned char* pt,
     unsigned char* ct)
 {
@@ -378,8 +347,8 @@ void CGXCipher::Xor(
     unsigned char* dst,
     const unsigned char* src)
 {
-    unsigned long* d = (unsigned long*)dst;
-    unsigned long* s = (unsigned long*)src;
+    uint32_t* d = (uint32_t*)dst;
+    uint32_t* s = (uint32_t*)src;
     *d++ ^= *s++;
     *d++ ^= *s++;
     *d++ ^= *s++;
@@ -509,43 +478,59 @@ void CGXCipher::Inc32(unsigned char* block)
     PUT32(block + 16 - 4, val);
 }
 
-void CGXCipher::Gctr(unsigned long* aes, const unsigned char* icb, const unsigned char* x, int xlen, unsigned char* y)
+void CGXCipher::Gctr(unsigned int* aes, const unsigned char* icb, unsigned char* in, int len, unsigned char* out)
 {
     size_t i, n, last;
-    unsigned char cb[16], tmp[16];
-    const unsigned char* xpos = x;
-    unsigned char* ypos = y;
-
-    if (xlen == 0)
+    unsigned char cb[16], tmp[16] = { 0 };
+    unsigned char* pin = in;
+    unsigned char* pout = out;
+    if (len == 0)
     {
         return;
     }
-    n = xlen / 16;
+    n = len / 16;
     memcpy(cb, icb, 16);
+
     //Full blocks.
     for (i = 0; i < n; i++)
     {
-        AesEncrypt(aes, aes[60], cb, ypos);
-        Xor(ypos, xpos);
-        xpos += 16;
-        ypos += 16;
+
+        if (out == NULL)
+        {
+            AesEncrypt(aes, aes[60], cb, tmp);
+            Xor(pin, tmp);
+        }
+        else
+        {
+            AesEncrypt(aes, aes[60], cb, pout);
+            Xor(pout, pin);
+            pout += 16;
+        }
+        pin += 16;
         Inc32(cb);
     }
-
-    last = x + xlen - xpos;
+    last = in + len - pin;
     //Last, partial block.
     if (last)
     {
         AesEncrypt(aes, aes[60], cb, tmp);
         for (i = 0; i < last; i++)
         {
-            *ypos = *xpos++ ^ tmp[i];
-            ++ypos;
+            if (out == NULL)
+            {
+                *pin ^= tmp[i];
+                ++pin;
+            }
+            else
+            {
+                *pout = *pin++ ^ tmp[i];
+                ++pout;
+            }
         }
     }
 }
 
-void CGXCipher::AesGcmGctr(unsigned long* aes, const unsigned char* J0, const unsigned char* in, int len, unsigned char* out)
+void CGXCipher::AesGcmGctr(unsigned int* aes, const unsigned char* J0, unsigned char* in, int len, unsigned char* out)
 {
     unsigned char J0inc[16];
     if (len == 0)
@@ -580,17 +565,16 @@ int CGXCipher::Encrypt(
     unsigned char tag,
     CGXByteBuffer& systemTitle,
     CGXByteBuffer& key,
-    CGXByteBuffer& plainText,
-    CGXByteBuffer& encrypted)
+    CGXByteBuffer& input,
+    bool encrypt)
 {
 #if defined(_WIN32) || defined(_WIN64) || defined(__linux__)//If Windows or Linux
-//    printf("System title: %s\r\n", systemTitle.ToHexString().c_str());
-//    printf("key: %s\r\n", key.ToHexString().c_str());
-//    printf("Authentication Key: %s\r\n", m_AuthenticationKey.ToHexString().c_str());
+    //    printf("System title: %s\r\n", systemTitle.ToHexString().c_str());
+    //    printf("key: %s\r\n", key.ToHexString().c_str());
+    //    printf("Authentication Key: %s\r\n", m_AuthenticationKey.ToHexString().c_str());
 #endif //defined(_WIN32) || defined(_WIN64) || defined(__linux__)//If Windows or Linux
-    unsigned short headerSize = 0;
     int ret;
-    unsigned long tmp[61] = { 0 };
+    uint32_t aes[61] = { 0 };
     unsigned char H[16] = { 0 };
     unsigned char J0[16] = { 0 };
     unsigned char S[16] = { 0 };
@@ -604,95 +588,112 @@ int CGXCipher::Encrypt(
     {
         return ret;
     }
-    if ((ret = GetAuthenticatedData(
-        security,
-        m_AuthenticationKey,
-        plainText,
-        aad)) != 0)
+    if ((ret = Int(aes, key.m_Data, 16 * 8)) != 0)
     {
         return ret;
     }
-
-    if ((ret = Int(tmp, key.m_Data, 16 * 8)) != 0)
-    {
-        return ret;
-    }
-    tmp[60] = 10;
-
+    aes[60] = 10;
     //Hash subkey.
-    AesEncrypt(tmp, tmp[60], H, H);
+    AesEncrypt(aes, aes[60], H, H);
     Init_j0(nonse.m_Data, (unsigned char)nonse.GetSize(), H, J0);
-    encrypted.Capacity(40 + 16 + (2 * plainText.m_Size));
-    //Data is encrypted.
-    if (type == DLMS_COUNT_TYPE_PACKET)
+
+    //Allocate space for authentication tag.
+    if (security != DLMS_SECURITY_ENCRYPTION && !encrypt)
     {
-        encrypted.SetUInt8(tag);
-        int len = 5 + plainText.m_Size;
-        if (security != DLMS_SECURITY_ENCRYPTION)
-        {
-            len += 12;
-        }
-        if (tag == DLMS_COMMAND_GENERAL_GLO_CIPHERING ||
-            tag == DLMS_COMMAND_GENERAL_DED_CIPHERING)
-        {
-            GXHelpers::SetObjectCount(systemTitle.m_Size, encrypted);
-            encrypted.Set(systemTitle.m_Data, systemTitle.m_Size);
-        }
-        GXHelpers::SetObjectCount(len, encrypted);
-        encrypted.SetUInt8(security);
-        encrypted.SetUInt32(frameCounter);
-        headerSize = (unsigned short)encrypted.m_Size;
-        if (security == DLMS_SECURITY_AUTHENTICATION)
-        {
-            encrypted.Set(&plainText, 0, plainText.m_Size);
-        }
+        //Save authentication key to nonse.
+        nonse.Clear();
+        nonse.Set(input.GetData() + input.GetSize() - 12, 12);
+        input.SetSize(input.GetSize() - 12);
     }
-    else
-    {
-        //Data is decrypted.
-        if (security == DLMS_SECURITY_AUTHENTICATION ||
-            security == DLMS_SECURITY_AUTHENTICATION_ENCRYPTION)
-        {
-            encrypted.Capacity(plainText.m_Size + (16 % aad.m_Size) + aad.m_Size);
-        }
-        else
-        {
-            encrypted.Capacity(plainText.m_Size);
-        }
-    }
-    encrypted.SetSize(plainText.GetSize() + headerSize);
     if (security == DLMS_SECURITY_AUTHENTICATION)
     {
-        if (type != DLMS_COUNT_TYPE_PACKET)
+        input.Move(input.m_Position, 17, input.Available());
+        input.m_Position = 0;
+        input.SetUInt8(0, security);
+        memcpy(input.m_Data + 1, m_AuthenticationKey.m_Data, 16);
+        AesGcmGhash(H, input.m_Data, input.m_Size, input.m_Data, 0, S);
+        if (type == DLMS_COUNT_TYPE_TAG)
         {
-            encrypted.SetSize(0);
+            input.m_Size = 0;
         }
         else
         {
-            memcpy(encrypted.m_Data + headerSize, plainText.m_Data, plainText.m_Size);
+            input.Move(17, 0, input.m_Size - 17);
         }
-        AesGcmGhash(H, aad.m_Data, aad.m_Size, encrypted.m_Data + headerSize, 0, S);
-        Gctr(tmp, J0, S, aad.m_Size, encrypted.m_Data + encrypted.m_Size);
-        encrypted.m_Size += 12;
+        Gctr(aes, J0, S, sizeof(S), input.m_Data + input.m_Size);
+        if (encrypt)
+        {
+            input.m_Size += 12;
+        }
+        else
+        {
+            if (memcmp(nonse.m_Data, input.m_Data + input.m_Size, 12) != 0)
+            {
+                ret = DLMS_ERROR_CODE_INVALID_TAG;
+            }
+        }
     }
     else if (security == DLMS_SECURITY_ENCRYPTION)
     {
         //Encrypt the data.
-        AesGcmGctr(tmp, J0, plainText.m_Data, plainText.m_Size, encrypted.m_Data + headerSize);
+        AesGcmGctr(aes, J0, input.m_Data + input.GetPosition(), input.Available(), NULL);
     }
     else if (security == DLMS_SECURITY_AUTHENTICATION_ENCRYPTION)
     {
-        //Encrypt the data.
-        AesGcmGctr(tmp, J0, plainText.m_Data, plainText.m_Size, encrypted.m_Data + headerSize);
-        if ((encrypted.m_Size - headerSize) % 16 != 0)
+        if (encrypt)
         {
-            unsigned short add = 16 - ((encrypted.m_Size - headerSize) % 16);
-            encrypted.Zero(encrypted.m_Size, add);
-            encrypted.m_Size -= add;
+            //Encrypt the data.
+            AesGcmGctr(aes, J0, input.m_Data + input.m_Position, input.Available(), NULL);
         }
-        AesGcmGhash(H, aad.m_Data, aad.m_Size, encrypted.m_Data + headerSize, plainText.m_Size, S);
-        Gctr(tmp, J0, S, aad.m_Size, encrypted.m_Data + encrypted.m_Size);
-        encrypted.m_Size += 12;
+        //Count authentication.
+        input.Move(input.m_Position, 17, input.Available());
+        input.m_Position = 0;
+        input.SetUInt8(0, security);
+        memcpy(input.m_Data + 1, m_AuthenticationKey.m_Data, 16);
+        AesGcmGhash(H, input.m_Data, 17, input.m_Data + 17, input.m_Size - 17, S);
+        input.Move(17, 0, input.m_Size - 17);
+        Gctr(aes, J0, S, sizeof(S), input.m_Data + input.m_Size);
+        if (!encrypt)
+        {
+            //Decrypt the data.
+            AesGcmGctr(aes, J0, input.m_Data + input.m_Position, input.Available(), NULL);
+        }
+        Gctr(aes, J0, S, sizeof(S), input.m_Data + input.m_Size);
+        if (encrypt)
+        {
+            input.m_Size += 12;
+        }
+        else
+        {
+            if (memcmp(nonse.m_Data, input.m_Data + input.m_Size, 12) != 0)
+            {
+                ret = DLMS_ERROR_CODE_INVALID_TAG;
+            }
+        }
+    }
+    if (encrypt)
+    {
+        ++m_FrameCounter;
+    }
+    if (encrypt && type == DLMS_COUNT_TYPE_PACKET)
+    {
+        nonse.Clear();
+        if ((ret = nonse.SetUInt8(tag)) == 0)
+        {
+            if (tag == DLMS_COMMAND_GENERAL_GLO_CIPHERING ||
+                tag == DLMS_COMMAND_GENERAL_DED_CIPHERING)
+            {
+                GXHelpers::SetObjectCount(8, nonse);
+                nonse.Set(systemTitle.GetData(), 8);
+            }
+            GXHelpers::SetObjectCount(5 + input.GetSize(), nonse);
+            if ((ret = nonse.SetUInt8(security)) == 0 &&
+                (ret = nonse.SetUInt32(frameCounter)) == 0)
+            {
+                input.Move(0, nonse.GetSize(), input.GetSize());
+                memcpy(input.m_Data, nonse.m_Data, nonse.GetSize());
+            }
+        }
     }
     return 0;
 }
@@ -710,7 +711,7 @@ int CGXCipher::Decrypt(
     unsigned long frameCounter;
     DLMS_COMMAND cmd;
     CGXByteBuffer* pTitle = &title;
-    CGXByteBuffer tag, ciphertext, systemTitle, countTag;
+    CGXByteBuffer systemTitle, countTag;
     if (data.GetSize() - data.GetPosition() < 2)
     {
         return DLMS_ERROR_CODE_INVALID_PARAMETER;
@@ -762,6 +763,10 @@ int CGXCipher::Decrypt(
     {
         return ret;
     }
+    if (data.Available() < length)
+    {
+        return DLMS_ERROR_CODE_OUTOFMEMORY;
+    }
     if ((ret = data.GetUInt8(&ch)) != 0)
     {
         return ret;
@@ -772,45 +777,6 @@ int CGXCipher::Decrypt(
     {
         return ret;
     }
-    m_FrameCounter = frameCounter + 1;
-    if (security == DLMS_SECURITY_AUTHENTICATION)
-    {
-        length = (unsigned short)(data.m_Size - data.m_Position - 12);
-        //Get tag
-        tag.Set(data.m_Data + data.GetPosition() + length, 12);
-        //Skip tag from data.
-        data.SetSize(data.GetPosition() + length);
-        // Check tag.
-        if ((ret = Encrypt(
-            security,
-            DLMS_COUNT_TYPE_TAG,
-            frameCounter,
-            0,
-            title,
-            key,
-            data,
-            countTag)) == 0)
-        {
-            // Check tag.
-            if (memcmp(tag.m_Data, countTag.m_Data, 12) != 0)
-            {
-                ret = DLMS_ERROR_CODE_INVALID_TAG;
-            }
-        }
-        return ret;
-    }
-    if (security == DLMS_SECURITY_ENCRYPTION)
-    {
-        length = (unsigned short)(data.m_Size - data.m_Position);
-        ciphertext.Set(&data, data.GetPosition(), length);
-    }
-    else if (security == DLMS_SECURITY_AUTHENTICATION_ENCRYPTION)
-    {
-        length = (unsigned short)(data.m_Size - data.m_Position - 12);
-        ciphertext.Set(&data, data.m_Position, length);
-        tag.Set(&data, data.m_Position, 12);
-    }
-    data.Clear();
     if ((ret = Encrypt(
         security,
         DLMS_COUNT_TYPE_DATA,
@@ -818,16 +784,10 @@ int CGXCipher::Decrypt(
         0,
         *pTitle,
         key,
-        ciphertext,
-        data)) != 0)
+        data,
+        false)) != 0)
     {
         return ret;
-    }
-    //Check tag.
-    if (security == DLMS_SECURITY_AUTHENTICATION_ENCRYPTION)
-    {
-        //Remove tag.
-        data.SetSize(data.GetSize() - 12);
     }
     return 0;
 }
@@ -852,16 +812,6 @@ static unsigned char GaloisMultiply(unsigned char value)
     }
 }
 
-/**
-     * Encrypt data using AES.
-     *
-     * @param data
-     *            Encrypted data.
-     * @param offset
-     *            Data offset.
-     * @param secret
-     *            Secret.
-     */
 int CGXCipher::Aes1Encrypt(
     CGXByteBuffer& buff,
     unsigned short offset,
@@ -942,6 +892,95 @@ int CGXCipher::Aes1Encrypt(
     return 0;
 }
 
+int CGXCipher::Aes1Decrypt(
+    CGXByteBuffer& buff,
+    CGXByteBuffer& secret)
+{
+    unsigned char buf1, buf2, buf3, round, i;
+    int buf4;
+    CGXByteBuffer key2;
+    key2.Set(&secret, 0, secret.GetSize());
+    unsigned char* data = buff.GetData();
+    unsigned char* key = key2.GetData();
+    for (round = 0; round < 10; round++) {
+        key[0] = (S_BOX[key[13] & 0xFF] ^ key[0] ^ R_CON[round]);
+        key[1] = (S_BOX[key[14] & 0xFF] ^ key[1]);
+        key[2] = (S_BOX[key[15] & 0xFF] ^ key[2]);
+        key[3] = (S_BOX[key[12] & 0xFF] ^ key[3]);
+        for (i = 4; i < 16; i++) {
+            key[i] = (key[i] ^ key[i - 4]);
+        }
+    }
+
+    for (i = 0; i < 16; i++) {
+        data[i] = (data[i] ^ key[i]);
+    }
+
+    for (round = 0; round < 10; ++round) {
+        for (i = 15; i > 3; --i) {
+            key[i] = (key[i] ^ key[i - 4]);
+        }
+        key[0] = (S_BOX[key[13] & 0xFF] ^ key[0] ^ R_CON[9 - round]);
+        key[1] = (S_BOX[key[14] & 0xFF] ^ key[1]);
+        key[2] = (S_BOX[key[15] & 0xFF] ^ key[2]);
+        key[3] = (S_BOX[key[12] & 0xFF] ^ key[3]);
+
+        if (round > 0) {
+            for (i = 0; i < 4; i++) {
+                buf4 = (i << 2) & 0xFF;
+
+                buf1 = GaloisMultiply(
+                    GaloisMultiply(data[buf4] ^ data[buf4 + 2]));
+                buf2 = GaloisMultiply(
+                    GaloisMultiply(data[buf4 + 1] ^ data[buf4 + 3]));
+                data[buf4] ^= buf1;
+                data[buf4 + 1] ^= buf2;
+                data[buf4 + 2] ^= buf1;
+                data[buf4 + 3] ^= buf2;
+
+                buf1 = (data[buf4] ^ data[buf4 + 1] ^ data[buf4 + 2] ^ data[buf4 + 3]);
+                buf2 = data[buf4];
+                buf3 = (data[buf4] ^ data[buf4 + 1]);
+                buf3 = GaloisMultiply(buf3);
+                data[buf4] = (data[buf4] ^ buf3 ^ buf1);
+                buf3 = (data[buf4 + 1] ^ data[buf4 + 2]);
+                buf3 = GaloisMultiply(buf3);
+                data[buf4 + 1] = (data[buf4 + 1] ^ buf3 ^ buf1);
+                buf3 = (data[buf4 + 2] ^ data[buf4 + 3]);
+                buf3 = GaloisMultiply(buf3);
+                data[buf4 + 2] = (data[buf4 + 2] ^ buf3 ^ buf1);
+                buf3 = (data[buf4 + 3] ^ buf2);
+                buf3 = GaloisMultiply(buf3);
+                data[buf4 + 3] = (data[buf4 + 3] ^ buf3 ^ buf1);
+            }
+        }
+        // Row 1
+        buf1 = data[13];
+        data[13] = data[9];
+        data[9] = data[5];
+        data[5] = data[1];
+        data[1] = buf1;
+        // Row 2
+        buf1 = data[10];
+        buf2 = data[14];
+        data[10] = data[2];
+        data[14] = data[6];
+        data[2] = buf1;
+        data[6] = buf2;
+        // Row 3
+        buf1 = data[3];
+        data[3] = data[7];
+        data[7] = data[11];
+        data[11] = data[15];
+        data[15] = buf1;
+
+        for (i = 0; i < 16; i++) {
+            data[i] = (S_BOX_REVERSED[data[i] & 0xFF] ^ key[i]);
+        }
+    }
+    return 0;
+}
+
 bool CGXCipher::IsCiphered()
 {
     return m_Security != DLMS_SECURITY_NONE;
@@ -1013,6 +1052,16 @@ unsigned long CGXCipher::GetFrameCounter()
 }
 
 void CGXCipher::SetFrameCounter(unsigned long value)
+{
+    m_FrameCounter = value;
+}
+
+unsigned long CGXCipher::GetInvocationCounter()
+{
+    return m_FrameCounter;
+}
+
+void CGXCipher::SetInvocationCounter(unsigned long value)
 {
     m_FrameCounter = value;
 }
